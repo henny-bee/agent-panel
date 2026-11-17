@@ -1937,6 +1937,10 @@ impl Render for Changes {
         let index = self.git.read(cx).index.clone();
         let empty = match &index {
             None => Some("Loading changes…".to_owned()),
+            // Outside any repository Git reports no branch and no HEAD.
+            Some(i) if i.files.is_empty() && i.branch.is_none() && i.head.is_none() => {
+                Some("Not a Git repository. Pick a folder with one in the Explorer.".into())
+            }
             Some(i) if i.files.is_empty() => Some(if i.ahead > 0 || i.behind > 0 {
                 sync_status_label(i)
             } else {

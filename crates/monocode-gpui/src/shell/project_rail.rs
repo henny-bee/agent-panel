@@ -1777,6 +1777,14 @@ impl Shell {
         .detach();
     }
     pub(super) fn sync_project_rail_git_stats(&mut self, cx: &mut Context<Self>) {
+        // A folder picked in the panel is not the project's own checkout.
+        if self
+            .workspace
+            .active
+            .is_some_and(|id| self.workspace.panel_folders.contains_key(&id))
+        {
+            return;
+        }
         if let Some(stats) = self.git.read(cx).stats.clone() {
             self.project_rail_stats
                 .values

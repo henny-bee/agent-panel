@@ -22,6 +22,7 @@ mod new_chat_choice;
 mod new_chat_choice_tests;
 mod notifications;
 mod orchestration;
+mod pane_panels;
 mod picker_preferences;
 mod pinned_tabs;
 mod project_rail;
@@ -794,6 +795,12 @@ pub(crate) struct Shell {
     resize: Option<(Pixels, f32)>,
     pub(crate) git: Entity<crate::git_status::ProjectGit>,
     pub(crate) right_panel: Option<Entity<RightPanel>>,
+    /// Each split pane's own project panel and the Git status it reads
+    /// (pane_panels.rs).
+    pane_panels: HashMap<i64, Entity<RightPanel>>,
+    pane_gits: HashMap<i64, Entity<crate::git_status::ProjectGit>>,
+    /// A pane panel's edge being dragged: pane, pointer start and width.
+    pane_panel_resize: Option<(i64, Pixels, f32)>,
     right_resize: Option<(Pixels, f32)>,
     /// Either right-panel handle is hovered; both of its hairlines light up.
     right_resize_hovered: bool,
@@ -1165,6 +1172,9 @@ impl Shell {
             resize: None,
             git,
             right_panel: None,
+            pane_panels: HashMap::new(),
+            pane_gits: HashMap::new(),
+            pane_panel_resize: None,
             right_resize: None,
             right_resize_hovered: false,
             right_slide: None,
@@ -1697,6 +1707,11 @@ impl Shell {
             Some((cwd, kind)) => (cwd, Some(kind)),
             None => (self.working_copy().to_owned(), None),
         };
+        let project = self
+            .workspace
+            .active
+            .and_then(|id| self.workspace.panel_folders.get(&id).cloned())
+            .unwrap_or(project);
         self.git.update(cx, |git, cx| git.set_project(project, cx));
         if let (Some(panel), Some(kind)) = (&self.right_panel, provider) {
             let changes = panel.read(cx).changes.clone();
@@ -1713,6 +1728,7 @@ impl Shell {
             && self.settings.is_none()
             && !self.search_page()
             && (self.mono_active(cx) || self.git.read(cx).available())
+            && !self.split_panels(cx)
     }
     fn sync_right_panel(&mut self, cx: &mut Context<Self>) {
         let opening = self.right_slide.as_ref().is_some_and(PaneSlide::opening);
@@ -1722,6 +1738,7 @@ impl Shell {
             && !self.app_view_open()
             && self.settings.is_none()
             && !self.search_page()
+            && !self.split_panels(cx)
             && !opening;
         if let Some(panel) = &self.right_panel {
             let sidebar_tab = (self.workspace.classic_layout
@@ -1782,6 +1799,11 @@ impl Shell {
         }
     }
     fn toggle_right_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.split_panels(cx)
+            && let Some(id) = self.workspace.active
+        {
+            return self.toggle_pane_panel(id, window, cx);
+        }
         self.set_right_panel_open(!self.workspace.right_panel_open, window, cx);
     }
     fn set_right_panel_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1827,19 +1849,62 @@ impl Shell {
         if self.right_panel.is_some() {
             return;
         }
-        let git = self.git.clone();
-        let (tab, order, view) = (
-            self.workspace.right_panel_tab,
+        let terminal_tab = self.terminal_in_panel(cx);
+        let tab = self.workspace.right_panel_tab;
+        let panel = self.new_project_panel(tab, None, self.git.clone(), window, cx);
+        panel.update(cx, |panel, cx| panel.set_terminal_tab(terminal_tab, cx));
+        self.right_panel = Some(panel);
+        self.sync_git(cx);
+    }
+    /// The project tools, for the window (`pane` None) or one split pane.
+    /// Choices made in it are saved for whichever it serves.
+    fn new_project_panel(
+        &mut self,
+        tab: crate::right_panel::RightTab,
+        pane: Option<i64>,
+        git: Entity<crate::git_status::ProjectGit>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<RightPanel> {
+        let panel_git = git.clone();
+        let (order, view) = (
             self.workspace.right_panel_tabs.clone(),
             self.workspace.changes_view,
         );
-        let terminal_tab = self.terminal_in_panel(cx);
-        let panel = cx.new(|cx| {
-            let mut panel = RightPanel::new(git, tab, order, window, cx);
-            panel.set_terminal_tab(terminal_tab, cx);
-            panel
-        });
+        let panel = cx.new(|cx| RightPanel::new(git, tab, order, window, cx));
         let explorer = panel.read(cx).explorer.clone();
+        let claude = match pane {
+            Some(id) => self.workspace.pane_panels.get(&id).and_then(|p| p.claude),
+            None => self.workspace.right_panel_claude,
+        };
+        explorer.update(cx, |e, cx| e.set_claude_tab(claude, cx));
+        self.observations.push(cx.subscribe(
+            &explorer,
+            move |this, _, event: &crate::explorer::ClaudeTabChanged, cx| {
+                match pane {
+                    Some(id) => this.workspace.pane_panels.entry(id).or_default().claude = event.0,
+                    None => this.workspace.right_panel_claude = event.0,
+                }
+                this.persist(cx);
+            },
+        ));
+        self.observations.push(cx.subscribe(
+            &explorer,
+            move |this, _, event: &crate::explorer::FolderChosen, cx| {
+                let Some(id) = pane.or(this.workspace.active) else {
+                    return;
+                };
+                match &event.0 {
+                    Some(folder) => this.workspace.panel_folders.insert(id, folder.clone()),
+                    None => this.workspace.panel_folders.remove(&id),
+                };
+                if pane.is_none() {
+                    this.sync_git(cx);
+                }
+                this.persist(cx);
+                cx.notify();
+            },
+        ));
         self.observations.push(cx.subscribe(
             &explorer,
             |this, _, event: &crate::explorer::FileActionError, cx| {
@@ -1852,10 +1917,10 @@ impl Shell {
         self.observations.push(cx.subscribe_in(
             &explorer,
             window,
-            |this, _, event: &crate::explorer::OpenFile, window, cx| {
+            move |this, _, event: &crate::explorer::OpenFile, window, cx| {
                 this.open_review(
                     crate::review::ReviewTab::File {
-                        cwd: this.git.read(cx).project().into(),
+                        cwd: panel_git.read(cx).project().into(),
                         path: event.0.clone(),
                     },
                     window,
@@ -1889,19 +1954,23 @@ impl Shell {
         ));
         let changes = panel.read(cx).changes.clone();
         changes.update(cx, |c, cx| c.set_view(view, cx));
-        self.observations
-            .push(cx.subscribe(&panel, |this, _, event: &PanelEvent, cx| {
+        self.observations.push(
+            cx.subscribe(&panel, move |this, _, event: &PanelEvent, cx| {
                 match event {
-                    PanelEvent::Tab(tab) => {
-                        this.workspace.right_panel_tab = *tab;
-                        if *tab == crate::right_panel::RightTab::Terminal {
-                            this.ensure_panel_terminal(cx);
+                    PanelEvent::Tab(tab) => match pane {
+                        Some(id) => this.workspace.pane_panels.entry(id).or_default().tab = *tab,
+                        None => {
+                            this.workspace.right_panel_tab = *tab;
+                            if *tab == crate::right_panel::RightTab::Terminal {
+                                this.ensure_panel_terminal(cx);
+                            }
                         }
-                    }
+                    },
                     PanelEvent::Reordered(order) => this.workspace.right_panel_tabs = order.clone(),
                 }
                 this.persist(cx);
-            }));
+            }),
+        );
         self.observations.push(cx.subscribe_in(
             &changes,
             window,
@@ -1946,8 +2015,7 @@ impl Shell {
                 );
             },
         ));
-        self.right_panel = Some(panel);
-        self.sync_git(cx);
+        panel
     }
     /// The active tab's review pane, created from its saved state.
     fn unsaved_files(&self, cx: &App) -> bool {
@@ -2382,6 +2450,7 @@ impl Shell {
                     .text_color(content(1.))
                     .child(title),
             )
+            .children(self.pane_header_controls(id, cx))
             .children(
                 [
                     (SplitDir::Right, "split-right", "Split right"),
@@ -2589,6 +2658,22 @@ impl Shell {
             let content = match entering {
                 Some(edge) => pinned(leaf, edge, surface),
                 None => div().size_full().flex().flex_col().child(surface),
+            };
+            let content = match self.pane_panel_frame(id, window, cx) {
+                Some(panel) => div()
+                    .size_full()
+                    .flex()
+                    .child(
+                        div()
+                            .h_full()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .child(content),
+                    )
+                    .child(panel),
+                None => content,
             };
             panes.push(
                 frame(id, rect)
@@ -4089,6 +4174,7 @@ impl Shell {
     fn release_resizes(&mut self, cx: &mut Context<Self>) -> bool {
         let any = [
             self.pane_sash.take().is_some(),
+            self.pane_panel_resize.take().is_some(),
             self.resize.take().is_some(),
             self.project_resize.take().is_some(),
             self.right_resize.take().is_some(),
@@ -5048,6 +5134,13 @@ impl Shell {
 
     /// TitleBar.tsx's right panel toggle, `pl-1.5 pr-3` clear of the edge.
     fn panel_toggle(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // Split panes carry these controls in their own headers.
+        if self.split_panels(cx) {
+            return titlebar_drag_area()
+                .w(px(self.toggle_room(cx)))
+                .flex_shrink_0()
+                .into_any_element();
+        }
         let mono = self.mono_active(cx);
         if self.workspace.classic_layout && !mono {
             return div().into_any_element();
@@ -5304,6 +5397,9 @@ impl Shell {
         }
         // Client-drawn window controls hold the corner's right end.
         let controls = self.window_controls;
+        if self.split_panels(cx) {
+            return 12. + controls;
+        }
         if self.mono_active(cx) || self.git.read(cx).available() {
             if self.workspace.right_panel_open && !self.app_view_open() {
                 if self.mono_active(cx) {
@@ -8841,6 +8937,8 @@ impl Render for Shell {
             }
             None => full,
         };
+        self.sync_pane_panels(cx);
+        self.sync_right_panel(cx);
         let right_shown = self.right_panel_shown(cx);
         self.right_drawn = if right_shown { right_width } else { 0. };
         let poll_git = self.window_active && !self.mono_active(cx);
@@ -9285,6 +9383,7 @@ impl Render for Shell {
                 this.move_space_drag(event, window, cx);
                 this.move_classic_sidebar_tab(event, cx);
                 this.drag_sash(event, cx);
+                this.drag_pane_panel(event, cx);
                 this.drag_dock(event, cx);
                 this.drag_review(event, cx);
                 if let Some((start, width)) = this.project_resize {

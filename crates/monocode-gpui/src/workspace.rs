@@ -106,6 +106,13 @@ pub(crate) struct Workspace {
     pub right_panel_tab: crate::right_panel::RightTab,
     pub right_panel_width: f32,
     pub right_panel_tabs: Vec<crate::right_panel::RightTab>,
+    /// The Claude view the panel's Explorer shows in place of the files.
+    pub right_panel_claude: Option<crate::claude_panels::ClaudeTab>,
+    /// Each split pane's own project panel, by pane id.
+    pub pane_panels: HashMap<i64, PanePanel>,
+    /// A folder picked in a chat's panel, shown there instead of the chat's
+    /// own (Explorer, Changes, History and the change count), by pane id.
+    pub panel_folders: HashMap<i64, String>,
     pub changes_view: crate::changes::ChangesView,
     /// Each tab's file/review pane beside its chat.
     pub reviews: std::collections::HashMap<i64, crate::review::ReviewState>,
@@ -223,6 +230,27 @@ pub(crate) struct TerminalPane {
     pub cwd: String,
 }
 
+/// A split pane's project panel: shown or not, its tab, the Claude view its
+/// Explorer shows and its width.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct PanePanel {
+    pub open: bool,
+    pub tab: crate::right_panel::RightTab,
+    pub claude: Option<crate::claude_panels::ClaudeTab>,
+    pub width: f32,
+}
+impl Default for PanePanel {
+    fn default() -> Self {
+        Self {
+            open: false,
+            tab: Default::default(),
+            claude: None,
+            width: crate::right_panel::WIDTH_DEFAULT,
+        }
+    }
+}
+
 /// A project's dock: its place, size and the terminals it holds. Shells are
 /// not restored; the dock reopens the same tabs in their directories.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -335,6 +363,9 @@ impl Default for Workspace {
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
             right_panel_tabs: crate::right_panel::RightTab::normalize(&[]),
+            right_panel_claude: None,
+            pane_panels: Default::default(),
+            panel_folders: Default::default(),
             changes_view: Default::default(),
             reviews: Default::default(),
             review_owners: Default::default(),

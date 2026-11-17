@@ -3,6 +3,7 @@
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.
 use crate::{
+    claude_panels::{ClaudeActivity, ClaudePanel, ClaudePanelEvent, ClaudeTab},
     file_icons::file_type_icon,
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
@@ -213,6 +214,15 @@ pub(crate) struct Explorer {
     keyboard: bool,
     typeahead: (String, Option<Instant>),
     next_id: u64,
+    /// The agents or in-this-chat view of the shown Claude session, which the
+    /// tree gives way to while `claude_tab` is set. None for other sessions.
+    claude: Option<Entity<ClaudePanel>>,
+    /// The box above the tree: shows the folder and takes a typed one.
+    folder_input: Entity<Input>,
+    /// The panel shows a folder picked here instead of its chat's own.
+    custom_folder: bool,
+    claude_tab: Option<ClaudeTab>,
+    _claude_events: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -235,6 +245,12 @@ pub(crate) struct OpenSearchMatch {
     pub pin: bool,
 }
 impl EventEmitter<OpenSearchMatch> for Explorer {}
+/// The user picked a folder for the panel; None goes back to the chat's own.
+pub(crate) struct FolderChosen(pub Option<String>);
+impl EventEmitter<FolderChosen> for Explorer {}
+/// The user switched between the files and a Claude view.
+pub(crate) struct ClaudeTabChanged(pub Option<ClaudeTab>);
+impl EventEmitter<ClaudeTabChanged> for Explorer {}
 
 impl Explorer {
     pub(crate) fn new(
@@ -253,6 +269,11 @@ impl Explorer {
             input
         });
         let name_focus = name_input.read(cx).focus_handle(cx);
+        let folder_input = cx.new(|cx| {
+            let mut input = Input::field("Folder", "Type a folder path", content(0.35), cx);
+            input.set_font_size(12.);
+            input
+        });
         let subscriptions = vec![
             cx.subscribe(&git, |this, _, _: &GitChanged, cx| this.git_changed(cx)),
             cx.observe(&git, |this, _, cx| {
@@ -270,6 +291,9 @@ impl Explorer {
             cx.subscribe(&name_input, |this, _, _: &input::Changed, cx| {
                 this.name_error = None;
                 this.rebuild(cx);
+            }),
+            cx.subscribe(&folder_input, |this, _, _: &input::Submitted, cx| {
+                this.submit_folder(cx)
             }),
             cx.on_blur(&name_focus, window, |this, window, cx| {
                 if this.naming.is_some() && !this.name_busy {
@@ -305,8 +329,159 @@ impl Explorer {
             keyboard: false,
             typeahead: (String::new(), None),
             next_id: 0,
+            claude: None,
+            folder_input,
+            custom_folder: false,
+            claude_tab: None,
+            _claude_events: None,
             _subscriptions: subscriptions,
         }
+    }
+    /// The Claude session this Explorer sits beside, or None when it is not
+    /// a Claude session; its view buttons show only for one.
+    pub(crate) fn set_claude(
+        &mut self,
+        activity: Option<Entity<ClaudeActivity>>,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .claude
+            .as_ref()
+            .map(|p| p.read(cx).activity.entity_id());
+        if current == activity.as_ref().map(|a| a.entity_id()) {
+            return;
+        }
+        self._claude_events = None;
+        self.claude = activity.map(|activity| {
+            let tab = self.claude_tab.unwrap_or(ClaudeTab::Agents);
+            let panel = cx.new(|cx| ClaudePanel::new(activity, tab, cx));
+            self._claude_events = Some(cx.subscribe(
+                &panel,
+                |this, _, event: &ClaudePanelEvent, cx| match event {
+                    ClaudePanelEvent::Hide => this.show_claude(None, cx),
+                    ClaudePanelEvent::Open(path) => cx.emit(OpenFile(path.clone())),
+                },
+            ));
+            panel
+        });
+        cx.notify();
+    }
+    /// Restores a saved choice without reporting it back.
+    pub(crate) fn set_claude_tab(&mut self, tab: Option<ClaudeTab>, cx: &mut Context<Self>) {
+        if self.claude_tab != tab {
+            self.claude_tab = tab;
+            if let (Some(panel), Some(tab)) = (&self.claude, tab) {
+                panel.update(cx, |panel, cx| {
+                    panel.tab = tab;
+                    cx.notify();
+                });
+            }
+            cx.notify();
+        }
+    }
+    pub(crate) fn set_custom_folder(&mut self, custom: bool, cx: &mut Context<Self>) {
+        if self.custom_folder != custom {
+            self.custom_folder = custom;
+            cx.notify();
+        }
+    }
+    /// A typed folder, relative to the shown one unless absolute; `~` is home.
+    fn submit_folder(&mut self, cx: &mut Context<Self>) {
+        let typed = self.folder_input.read(cx).content.trim().to_owned();
+        if typed.is_empty() {
+            return cx.emit(FolderChosen(None));
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = typed_folder(&typed, &self.cwd, &home);
+        if path.is_dir() {
+            let path = path.to_string_lossy();
+            let path = match path.trim_end_matches('/') {
+                "" => "/",
+                trimmed => trimmed,
+            };
+            cx.emit(FolderChosen(Some(path.to_owned())));
+        } else {
+            cx.emit(FileActionError(Some(format!(
+                "{} is not a folder",
+                path.display()
+            ))));
+        }
+    }
+    /// The system folder window, as New project opens it.
+    fn pick_folder(&mut self, cx: &mut Context<Self>) {
+        let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Show folder".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let chosen = match picker.await {
+                Ok(Ok(Some(paths))) => paths.first().map(|p| Ok(p.to_string_lossy().into_owned())),
+                Ok(Ok(None)) => None,
+                error => Some(Err(format!("Could not open the folder window: {error:?}"))),
+            };
+            let _ = this.update(cx, |_, cx| match chosen {
+                Some(Ok(path)) => cx.emit(FolderChosen(Some(path))),
+                Some(Err(error)) => cx.emit(FileActionError(Some(error))),
+                None => {}
+            });
+        })
+        .detach();
+    }
+    fn folder_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .px_2()
+            .pt_1p5()
+            .pb_1()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .h(px(30.))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pl_2()
+                    .pr_1()
+                    .rounded_lg()
+                    .bg(content(0.05))
+                    .child(div().flex_1().min_w_0().child(self.folder_input.clone()))
+                    .when(self.custom_folder, |d| {
+                        d.child(
+                            icon_action(
+                                "explorer-folder-reset",
+                                "Back to this chat's folder",
+                                "x",
+                                true,
+                            )
+                            .debug_selector(|| "explorer-folder-reset".into())
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(FolderChosen(None)))),
+                        )
+                    })
+                    .child(div().w(px(1.)).h(px(16.)).bg(stroke()))
+                    .child(
+                        icon_action(
+                            "explorer-folder-pick",
+                            "Choose a folder…",
+                            "folder-open",
+                            true,
+                        )
+                        .debug_selector(|| "explorer-folder-pick".into())
+                        .on_click(cx.listener(|this, _, _, cx| this.pick_folder(cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+    /// New file, new folder and collapse act on the tree, so bring it back
+    /// from B or B2 first.
+    fn show_tree(&mut self, cx: &mut Context<Self>) {
+        if self.claude_tab.is_some() {
+            self.show_claude(None, cx);
+        }
+    }
+    fn show_claude(&mut self, tab: Option<ClaudeTab>, cx: &mut Context<Self>) {
+        self.set_claude_tab(tab, cx);
+        cx.emit(ClaudeTabChanged(tab));
     }
     pub(crate) fn set_show_excluded(&mut self, show: bool, cx: &mut Context<Self>) {
         if self.show_excluded != show {
@@ -397,6 +572,8 @@ impl Explorer {
             );
         }
         self.cwd = root.clone();
+        self.folder_input
+            .update(cx, |input, cx| input.set_text(root.clone(), cx));
         if let Some(search) = &self.search {
             search.update(cx, |search, cx| search.set_root(root.clone(), cx));
         }
@@ -1248,6 +1425,7 @@ impl Explorer {
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
+            .debug_selector(move || id.into())
             .role(Role::Button)
             .aria_label(label)
             .group(id)
@@ -1507,6 +1685,42 @@ impl Render for Explorer {
             .menu
             .as_ref()
             .map(|open| menu_popover(&open.menu, Anchor::Point(open.anchor), cx).gap(0.));
+        // B and B2: the toolbar stays; the tree gives way to the open view.
+        let claude_view = self.claude_tab.and(self.claude.clone());
+        let claude_buttons: Vec<AnyElement> = match self.claude {
+            Some(_) => [
+                (
+                    ClaudeTab::Agents,
+                    "explorer-claude-agents",
+                    "Agents in this chat",
+                    "bot",
+                ),
+                (
+                    ClaudeTab::Chat,
+                    "explorer-claude-chat",
+                    "What Claude used in this chat",
+                    "message-square",
+                ),
+            ]
+            .into_iter()
+            .map(|(tab, id, label, path)| {
+                let active = self.claude_tab == Some(tab);
+                Self::header_icon(id, label.into(), path, true)
+                    .aria_toggled(if active {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .when(active, |d| d.bg(content(0.1)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let next = (this.claude_tab != Some(tab)).then_some(tab);
+                        this.show_claude(next, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect(),
+            None => Vec::new(),
+        };
         div()
             .id("explorer")
             .role(Role::TabPanel)
@@ -1625,6 +1839,7 @@ impl Render for Explorer {
                     .child(
                         Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)
                             .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_tree(cx);
                                 this.start_create(false, None, window, cx)
                             })),
                     )
@@ -1636,6 +1851,7 @@ impl Render for Explorer {
                             true,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_tree(cx);
                             this.start_create(true, None, window, cx)
                         })),
                     )
@@ -1646,7 +1862,10 @@ impl Render for Explorer {
                             "fold-vertical",
                             true,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_tree(cx);
+                            this.collapse_all(cx)
+                        })),
                     )
                     .child(
                         Self::header_icon(
@@ -1656,94 +1875,115 @@ impl Render for Explorer {
                             true,
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
-                    ),
+                    )
+                    .children(claude_buttons),
             )
-            .child(
-                div()
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
+            .children(claude_view)
+            .when(self.claude_tab.is_none() || self.claude.is_none(), |d| {
+                d.child(self.folder_row(cx))
                     .child(
                         div()
-                            .id("explorer-root")
-                            .role(Role::TreeItem)
-                            .aria_label(SharedString::from(cwd.clone()))
-                            .aria_expanded(root_open)
-                            .h_full()
-                            .min_w_0()
-                            .flex_1()
+                            .h(px(32.))
+                            .flex_shrink_0()
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .pl_2()
-                            .when(root_selected, |d| d.bg(selection()))
-                            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                                window.prevent_default()
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                window.focus(&this.focus, cx);
-                                let cwd = this.cwd.clone();
-                                this.select(cwd.clone(), cx);
-                                this.toggle(&cwd, cx);
-                            }))
+                            .child(
+                                div()
+                                    .id("explorer-root")
+                                    .role(Role::TreeItem)
+                                    .aria_label(SharedString::from(cwd.clone()))
+                                    .aria_expanded(root_open)
+                                    .h_full()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .pl_2()
+                                    .when(root_selected, |d| d.bg(selection()))
+                                    .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                        window.prevent_default()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        window.focus(&this.focus, cx);
+                                        let cwd = this.cwd.clone();
+                                        this.select(cwd.clone(), cx);
+                                        this.toggle(&cwd, cx);
+                                    }))
+                                    .on_drop(cx.listener(
+                                        |this, paths: &ExternalPaths, window, cx| {
+                                            this.drag_over = None;
+                                            let dest = this.cwd.clone();
+                                            this.copy_external(
+                                                paths.paths().to_vec(),
+                                                dest,
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .size_4()
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                icon(
+                                                    if root_open {
+                                                        "chevron-down"
+                                                    } else {
+                                                        "chevron-right"
+                                                    },
+                                                    14.,
+                                                )
+                                                .text_color(content(0.5)),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(content(0.5))
+                                            .child(name),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("explorer-tree")
+                            .role(Role::Tree)
+                            .flex_1()
+                            .min_h_0()
                             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                                 this.drag_over = None;
                                 let dest = this.cwd.clone();
                                 this.copy_external(paths.paths().to_vec(), dest, window, cx);
                             }))
-                            .child(
-                                div()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        icon(
-                                            if root_open {
-                                                "chevron-down"
-                                            } else {
-                                                "chevron-right"
-                                            },
-                                            14.,
-                                        )
-                                        .text_color(content(0.5)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(0.5))
-                                    .child(name),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .id("explorer-tree")
-                    .role(Role::Tree)
-                    .flex_1()
-                    .min_h_0()
-                    .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                        this.drag_over = None;
-                        let dest = this.cwd.clone();
-                        this.copy_external(paths.paths().to_vec(), dest, window, cx);
-                    }))
-                    .when(root_open, |d| {
-                        d.child(
-                            list(self.list.clone(), move |ix, _, cx| {
-                                entity.update(cx, |this, cx| this.line(ix, focused, cx))
-                            })
-                            .size_full(),
-                        )
-                    }),
-            )
+                            .when(root_open, |d| {
+                                d.child(
+                                    list(self.list.clone(), move |ix, _, cx| {
+                                        entity.update(cx, |this, cx| this.line(ix, focused, cx))
+                                    })
+                                    .size_full(),
+                                )
+                            }),
+                    )
+            })
             .children(menu)
             .into_any_element()
+    }
+}
+
+/// A folder typed in the Explorer's box: `~` is home, and a relative path is
+/// under the folder shown.
+fn typed_folder(typed: &str, cwd: &str, home: &str) -> PathBuf {
+    match typed.strip_prefix('~') {
+        Some(rest) => PathBuf::from(format!("{home}{rest}")),
+        None => Path::new(cwd).join(typed),
     }
 }
 
@@ -1762,7 +2002,21 @@ fn changed_range<T: PartialEq>(old: &[T], new: &[T]) -> (usize, usize, usize) {
 
 #[cfg(test)]
 mod changed_range_tests {
-    use super::changed_range;
+    use super::{changed_range, typed_folder};
+    use std::path::Path;
+
+    #[test]
+    fn typed_folders_resolve_home_relative_and_absolute_paths() {
+        assert_eq!(
+            typed_folder("~/code", "/p", "/home/u"),
+            Path::new("/home/u/code")
+        );
+        assert_eq!(
+            typed_folder("sub/dir", "/p", "/home/u"),
+            Path::new("/p/sub/dir")
+        );
+        assert_eq!(typed_folder("/mnt", "/p", "/home/u"), Path::new("/mnt"));
+    }
 
     #[test]
     fn expanding_a_folder_only_touches_the_inserted_rows() {
