@@ -10,9 +10,9 @@ use crate::{
     theme::*,
 };
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, FontFeatures,
-    FontWeight, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Role, SharedString,
-    Stateful, StyleRefinement, Subscription, WeakEntity, Window, div, prelude::*, px,
+    AnyElement, App, Bounds, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable,
+    FontFeatures, FontWeight, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Role,
+    SharedString, Stateful, StyleRefinement, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -50,6 +50,12 @@ pub(crate) const SKY_400: u32 = 0x00bcff;
 pub(crate) const RED_400: u32 = 0xff6467;
 /// `--color-background-base` in the default dark theme, hsl(240 0% 9%).
 pub(crate) const BACKGROUND_BASE: u32 = 0x171717;
+
+/// The GRAPH section under Changes keeps two history rows, and leaves the
+/// Changes header, commit box and a row above it.
+fn clamp_graph(height: f32, total: f32) -> f32 {
+    height.min(total - 160.).max(PANE_HEADER_HEIGHT + 88.)
+}
 
 pub(crate) fn tabular() -> FontFeatures {
     FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
@@ -250,6 +256,13 @@ pub(crate) struct RightPanel {
     pub explorer: Entity<Explorer>,
     pub changes: Entity<Changes>,
     pub history: Entity<History>,
+    /// The commit graph under Changes, VS Code's Source Control "Graph".
+    pub graph: Entity<History>,
+    graph_open: bool,
+    graph_height: f32,
+    /// The pointer's y and the height when the divider was pressed.
+    graph_drag: Option<(f32, f32)>,
+    split: crate::popover::AnchorSlot,
     focus: FocusHandle,
     tab: RightTab,
     order: Vec<RightTab>,
@@ -284,10 +297,19 @@ impl RightPanel {
     ) -> Self {
         let explorer = cx.new(|cx| Explorer::new(git.clone(), window, cx));
         let changes = cx.new(|cx| Changes::new(git.clone(), window, cx));
-        let history = cx.new(|cx| History::new(git.clone(), window, cx));
+        let history = cx.new(|cx| History::new(git.clone(), false, window, cx));
+        let graph = cx.new(|cx| History::new(git.clone(), true, window, cx));
         let subscriptions = vec![
             cx.observe(&git, |_, _, cx| cx.notify()),
             cx.subscribe(&git, |_, _, _: &GitChanged, cx| cx.notify()),
+            // Only a collapse changes the split; hovers stay in the cached pane.
+            cx.observe(&graph, |this, graph, cx| {
+                let open = graph.read(cx).open;
+                if this.graph_open != open {
+                    this.graph_open = open;
+                    cx.notify();
+                }
+            }),
         ];
         let panel = cx.entity();
         let tabs = cx.new(|cx| ProjectTabs {
@@ -300,6 +322,11 @@ impl RightPanel {
             explorer,
             changes,
             history,
+            graph,
+            graph_open: true,
+            graph_height: 280.,
+            graph_drag: None,
+            split: Default::default(),
             tab,
             order: RightTab::normalize(&order),
             shown: false,
@@ -389,6 +416,9 @@ impl RightPanel {
         });
         self.changes.update(cx, |c, cx| {
             c.set_enabled(shown && tab == RightTab::Changes, cx)
+        });
+        self.graph.update(cx, |h, cx| {
+            h.set_enabled(shown && tab == RightTab::Changes, cx)
         });
         self.history.update(cx, |h, cx| {
             h.set_enabled(shown && tab == RightTab::Graph, cx)
@@ -589,19 +619,115 @@ impl RightPanel {
     }
 }
 
+impl RightPanel {
+    fn drag_graph(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some((start, height)) = self.graph_drag else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.graph_drag = None;
+            cx.notify();
+            return;
+        }
+        let total = self
+            .split
+            .get()
+            .map_or(f32::INFINITY, |b| b.size.height.as_f32());
+        self.graph_height = clamp_graph(height + start - event.position.y.as_f32(), total);
+        cx.notify();
+    }
+    fn end_graph_drag(&mut self, cx: &mut Context<Self>) {
+        if self.graph_drag.take().is_some() {
+            cx.notify();
+        }
+    }
+    /// Changes above, the GRAPH section below, a divider between them.
+    fn changes_split(&self, cx: &mut Context<Self>) -> AnyElement {
+        let total = self
+            .split
+            .get()
+            .map_or(f32::INFINITY, |b| b.size.height.as_f32());
+        let height = if self.graph_open {
+            clamp_graph(self.graph_height, total)
+        } else {
+            PANE_HEADER_HEIGHT
+        };
+        let sash = div()
+            .id("graph-sash")
+            .group("resize-handle")
+            .role(Role::Splitter)
+            .aria_label("Resize graph")
+            .absolute()
+            .top(px(-3.5))
+            .left_0()
+            .right_0()
+            .h(px(6.))
+            .cursor(CursorStyle::ResizeUpDown)
+            .child(crate::shell::resize_border(
+                false,
+                self.graph_drag.is_some(),
+            ))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.graph_drag = Some((event.position.y.as_f32(), this.graph_height));
+                    cx.notify();
+                }),
+            );
+        div()
+            .id("right-panel-changes-split")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(self.split.layout_probe())
+            .child(
+                self.changes
+                    .clone()
+                    .cached(StyleRefinement::default().flex_1().min_h_0().w_full()),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .w_full()
+                    .h(px(height))
+                    .border_t_1()
+                    .border_color(stroke())
+                    .child(
+                        self.graph
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
+                    .when(self.graph_open, |d| d.child(sash)),
+            )
+            .on_mouse_move(
+                cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag_graph(event, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_graph_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_graph_drag(cx)),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for RightPanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pane: AnyElement = match self.tab {
             RightTab::Files => self
                 .explorer
                 .clone()
                 .cached(StyleRefinement::default().flex_1().min_h_0().w_full())
                 .into_any_element(),
-            RightTab::Changes => self
-                .changes
-                .clone()
-                .cached(StyleRefinement::default().flex_1().min_h_0().w_full())
-                .into_any_element(),
+            RightTab::Changes => self.changes_split(cx),
             RightTab::Graph => self
                 .history
                 .clone()

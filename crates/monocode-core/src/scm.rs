@@ -96,6 +96,18 @@ pub struct History {
     pub commits: Vec<HistoryCommit>,
 }
 
+/// The Graph's right-click card: what a history row leaves out.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDetails {
+    pub message: String,
+    pub files: i64,
+    pub additions: i64,
+    pub deletions: i64,
+    /// The commit's page on its hosted remote.
+    pub url: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedContext {
@@ -152,6 +164,40 @@ pub fn history(cwd: &Path, limit: Option<u32>) -> Result<History, String> {
         return remote_workspace::command("git_history", json!({"cwd":cwd,"limit":limit}));
     }
     history_for(&expand_home(cwd), limit)
+}
+
+/// One commit's full message, `--shortstat` and web page.
+pub fn commit_details(cwd: &Path, sha: &str) -> Result<CommitDetails, String> {
+    if remote_workspace::is_remote(cwd) {
+        return Err("Commit details are local only".into());
+    }
+    let root = expand_home(cwd);
+    let text = git_run(&root, &["show", "--shortstat", "--format=%B%x00", sha])
+        .ok_or_else(|| format!("Could not read commit {sha}"))?;
+    let (message, stat) = text.split_once('\0').unwrap_or((&text, ""));
+    let mut details = parse_shortstat(stat);
+    details.message = message.trim().to_owned();
+    details.url = git_remote_name(&root)
+        .and_then(|remote| git_stdout(&root, &["remote", "get-url", &remote]))
+        .and_then(|remote| crate::git::report::web_url(&remote))
+        .map(|(web, _)| format!("{web}/commit/{sha}"));
+    Ok(details)
+}
+
+/// ` 2 files changed, 3 insertions(+), 1 deletion(-)`
+fn parse_shortstat(stat: &str) -> CommitDetails {
+    let mut details = CommitDetails::default();
+    for part in stat.trim().split(',') {
+        let mut words = part.split_whitespace();
+        let n = words.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        match words.next() {
+            Some(w) if w.starts_with("file") => details.files = n,
+            Some(w) if w.starts_with("insertion") => details.additions = n,
+            Some(w) if w.starts_with("deletion") => details.deletions = n,
+            _ => {}
+        }
+    }
+    details
 }
 
 /// Stage a changed file or folder (`git add`).

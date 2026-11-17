@@ -326,6 +326,37 @@ fn parse_history_log_reads_records() {
 }
 
 #[test]
+fn commit_details_read_message_stat_and_web_page() {
+    let dir = tmp();
+    let dir = dir.path();
+    assert!(init_git_commit(dir, &[("a.txt", "a\nb\n")]));
+    std::fs::write(dir.join("a.txt"), "a\nc\nd\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "x\n").unwrap();
+    assert!(git(dir, &["add", "."]));
+    assert!(git(dir, &["commit", "-m", "second", "-m", "body line"]));
+    assert!(git(
+        dir,
+        &["remote", "add", "origin", "git@github.com:o/r.git"]
+    ));
+    let sha = git_stdout(dir, &["rev-parse", "HEAD"]).unwrap();
+
+    let details = commit_details(dir, &sha).unwrap();
+    assert_eq!(details.message, "second\n\nbody line");
+    assert_eq!(
+        (details.files, details.additions, details.deletions),
+        (2, 3, 1)
+    );
+    assert_eq!(
+        details.url,
+        Some(format!("https://github.com/o/r/commit/{sha}"))
+    );
+    assert_eq!(
+        parse_shortstat(" 1 file changed, 1 deletion(-)").deletions,
+        1
+    );
+}
+
+#[test]
 fn history_lists_commits_parents_and_head() {
     let dir = tmp();
     let dir = dir.path();

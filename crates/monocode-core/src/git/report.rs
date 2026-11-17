@@ -304,7 +304,7 @@ fn push(run: &Run) -> Push {
 }
 
 /// A hosted remote's web page and `owner/repo`, from its fetch URL.
-fn web_url(remote: &str) -> Option<(String, String)> {
+pub(crate) fn web_url(remote: &str) -> Option<(String, String)> {
     let remote = remote.trim().trim_end_matches('/');
     let remote = remote.strip_suffix(".git").unwrap_or(remote);
     let (host, path) = if let Some(rest) = remote

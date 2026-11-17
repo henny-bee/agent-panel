@@ -2065,29 +2065,34 @@ impl Shell {
                 }
             },
         ));
-        let history = panel.read(cx).history.clone();
-        self.observations.push(cx.subscribe_in(
-            &history,
-            window,
-            |this, _, event: &crate::history::HistoryEvent, window, cx| {
-                let crate::history::HistoryEvent::OpenCommit {
-                    cwd,
-                    sha,
-                    short_sha,
-                    subject,
-                } = event;
-                this.open_review(
-                    crate::review::ReviewTab::Commit {
-                        cwd: cwd.clone(),
-                        sha: sha.clone(),
-                        short_sha: short_sha.clone(),
-                        subject: subject.clone(),
-                    },
-                    window,
-                    cx,
-                );
-            },
-        ));
+        let histories = {
+            let panel = panel.read(cx);
+            [panel.history.clone(), panel.graph.clone()]
+        };
+        for history in histories {
+            self.observations.push(cx.subscribe_in(
+                &history,
+                window,
+                |this, _, event: &crate::history::HistoryEvent, window, cx| {
+                    let crate::history::HistoryEvent::OpenCommit {
+                        cwd,
+                        sha,
+                        short_sha,
+                        subject,
+                    } = event;
+                    this.open_review(
+                        crate::review::ReviewTab::Commit {
+                            cwd: cwd.clone(),
+                            sha: sha.clone(),
+                            short_sha: short_sha.clone(),
+                            subject: subject.clone(),
+                        },
+                        window,
+                        cx,
+                    );
+                },
+            ));
+        }
         panel
     }
     /// The active tab's review pane, created from its saved state.
@@ -4266,14 +4271,16 @@ impl Shell {
         self.git.update(cx, |git, cx| git.resume(cx));
         if let Some(panel) = &self.right_panel {
             let panel = panel.read(cx);
-            let (explorer, changes, history) = (
+            let (explorer, changes, history, graph) = (
                 panel.explorer.clone(),
                 panel.changes.clone(),
                 panel.history.clone(),
+                panel.graph.clone(),
             );
             explorer.update(cx, |e, cx| e.resume(cx));
             changes.update(cx, |c, cx| c.resume(cx));
             history.update(cx, |h, cx| h.resume(cx));
+            graph.update(cx, |h, cx| h.resume(cx));
         }
     }
     fn persist(&mut self, cx: &mut Context<Self>) {
@@ -8735,7 +8742,7 @@ fn sash_snap_line(vertical: bool) -> gpui::Div {
         }
     })
 }
-fn resize_border(vertical: bool, dragging: bool) -> gpui::Div {
+pub(crate) fn resize_border(vertical: bool, dragging: bool) -> gpui::Div {
     div()
         .absolute()
         .bg(content(0.12))

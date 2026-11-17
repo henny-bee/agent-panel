@@ -4,15 +4,17 @@ use crate::{
     git_graph::{self, GraphCommit, NodeKind, Row, RowGraph, SWIMLANE_WIDTH},
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
+    popover::{Anchor, popover},
     right_panel::*,
     theme::*,
 };
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Role,
-    ScrollStrategy, SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas,
-    div, fill, point, prelude::*, px, rgb, size, uniform_list,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
+    Hsla, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, Role, ScrollStrategy,
+    SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas, div, fill, point,
+    prelude::*, px, rgb, size, uniform_list,
 };
-use monocode_core::scm::{self, HistoryCommit};
+use monocode_core::scm::{self, CommitDetails, HistoryCommit};
 use std::{collections::HashMap, path::PathBuf};
 
 const ROW: f32 = 44.;
@@ -42,8 +44,19 @@ struct Item {
     graph: RowGraph,
 }
 
+/// The right-click card, keyed by SHA so a reload keeps it on its commit.
+struct Card {
+    sha: String,
+    at: Point<Pixels>,
+    details: Option<CommitDetails>,
+}
+
 pub(crate) struct History {
     git: Entity<ProjectGit>,
+    /// The collapsible GRAPH section under Changes, rather than the tab.
+    section: bool,
+    pub(crate) open: bool,
+    card: Option<Card>,
     cwd: String,
     enabled: bool,
     items: Vec<Item>,
@@ -64,7 +77,12 @@ pub(crate) struct History {
 }
 
 impl History {
-    pub(crate) fn new(git: Entity<ProjectGit>, _: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        git: Entity<ProjectGit>,
+        section: bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search = cx.new(|cx| {
             let mut input = Input::field("Search commits", "Search history…", content(0.35), cx);
             input.set_font_size(12.);
@@ -80,6 +98,9 @@ impl History {
         ];
         Self {
             git,
+            section,
+            open: true,
+            card: None,
             cwd: String::new(),
             enabled: false,
             items: Vec::new(),
@@ -252,6 +273,188 @@ impl History {
         });
         cx.notify();
     }
+    fn open_card(&mut self, ix: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let sha = self.items[ix].commit.sha.clone();
+        self.card = Some(Card {
+            sha: sha.clone(),
+            at,
+            details: None,
+        });
+        let path = PathBuf::from(&self.cwd);
+        let work = cx.background_executor().spawn({
+            let sha = sha.clone();
+            async move { scm::commit_details(&path, &sha) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                // A failed read leaves the card with the row's subject.
+                if let (Ok(details), Some(card)) = (result, this.card.as_mut())
+                    && card.sha == sha
+                {
+                    card.details = Some(details);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    fn close_card(&mut self, cx: &mut Context<Self>) {
+        self.card = None;
+        cx.notify();
+    }
+
+    /// VS Code's Graph hover: author, age, message, stat, refs, SHA and link.
+    fn card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let card = self.card.as_ref()?;
+        let item = self.items.iter().find(|i| i.commit.sha == card.sha)?;
+        let commit = &item.commit;
+        let details = card.details.as_ref();
+        let message = details
+            .map(|d| d.message.clone())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| commit.subject.clone());
+        let when = {
+            use chrono::TimeZone;
+            let ago = chrono::DateTime::from_timestamp(commit.timestamp, 0)
+                .map(|at| crate::inbox::ui::relative_time(&at.to_rfc3339()))
+                .unwrap_or_default();
+            match chrono::Local.timestamp_opt(commit.timestamp, 0).single() {
+                Some(at) => format!("{ago} ({})", at.format("%B %-d, %Y at %-I:%M %p")),
+                None => ago,
+            }
+        };
+        let rule = || div().h(px(1.)).flex_shrink_0().bg(content(0.1));
+        let row = || div().px_3().py_2().flex().items_center().gap_1();
+        let stat = details.filter(|d| d.files > 0).map(|d| {
+            let plural =
+                |n: i64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+            row()
+                .child(format!("{} changed", plural(d.files, "file")))
+                .when(d.additions > 0, |r| {
+                    r.child(
+                        div()
+                            .text_color(rgb(DIFF_ADD))
+                            .child(format!(", {}(+)", plural(d.additions, "insertion"))),
+                    )
+                })
+                .when(d.deletions > 0, |r| {
+                    r.child(
+                        div()
+                            .text_color(rgb(DIFF_DEL))
+                            .child(format!(", {}(-)", plural(d.deletions, "deletion"))),
+                    )
+                })
+        });
+        let url = details.and_then(|d| d.url.clone());
+        let github = url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://github.com/"));
+        let sha = commit.sha.clone();
+        let weak = cx.entity().downgrade();
+        Some(
+            popover("history-card", Anchor::Point(card.at))
+                .width(360.)
+                .on_dismiss(move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| this.close_card(cx));
+                })
+                .child(
+                    div()
+                        .id("history-card-body")
+                        .role(Role::Dialog)
+                        .aria_label("Commit details")
+                        .flex()
+                        .flex_col()
+                        .text_size(px(12.))
+                        .text_color(content(0.85))
+                        .child(
+                            row()
+                                .flex_wrap()
+                                .child(icon("account-user", 14.).text_color(content(0.55)))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(accent_color())
+                                        .child(format!("{},", commit.author)),
+                                )
+                                .child(icon("clock", 12.).ml_1().text_color(content(0.55)))
+                                .child(div().text_color(content(0.55)).child(when)),
+                        )
+                        .child(div().px_3().pb_2().child(message))
+                        .when_some(stat, |d, stat| d.child(rule()).child(stat))
+                        .when(!item.row.refs.is_empty(), |d| {
+                            d.child(rule()).child(
+                                row()
+                                    .flex_wrap()
+                                    .children(item.row.refs.iter().map(ref_pill)),
+                            )
+                        })
+                        .child(rule())
+                        .child(
+                            row()
+                                .gap_2()
+                                .child(icon("git-commit", 14.).text_color(content(0.55)))
+                                .child(
+                                    div()
+                                        .font_family(crate::fonts::mono())
+                                        .text_color(accent_color())
+                                        .child(commit.short_sha.clone()),
+                                )
+                                .child(
+                                    icon_action(
+                                        "history-card-copy",
+                                        "Copy commit SHA",
+                                        "copy",
+                                        true,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                sha.clone(),
+                                            ));
+                                            this.close_card(cx);
+                                        },
+                                    )),
+                                )
+                                .when_some(url, |d, url| {
+                                    d.child(div().text_color(content(0.3)).child("|")).child(
+                                        div()
+                                            .id("history-card-open")
+                                            .role(Role::Link)
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .cursor_pointer()
+                                            .text_color(accent_color())
+                                            .hover(|s| s.underline())
+                                            .child(
+                                                icon(
+                                                    if github {
+                                                        "inbox-github"
+                                                    } else {
+                                                        "external-link"
+                                                    },
+                                                    14.,
+                                                )
+                                                .text_color(accent_color()),
+                                            )
+                                            .child(if github {
+                                                "Open on GitHub"
+                                            } else {
+                                                "Open in browser"
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.open_url(&url);
+                                                this.close_card(cx);
+                                            })),
+                                    )
+                                }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
 
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let head = self.items.iter().find(|i| i.commit.head);
@@ -298,6 +501,44 @@ impl History {
                                 cx.listener(|this, _, window, cx| this.close_search(window, cx)),
                             ),
                         )
+                } else if self.section {
+                    let open = self.open;
+                    d.child(
+                        div()
+                            .id("history-section")
+                            .role(Role::Button)
+                            .aria_label("Graph")
+                            .aria_expanded(open)
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                icon(
+                                    if open {
+                                        "chevron-down"
+                                    } else {
+                                        "chevron-right"
+                                    },
+                                    14.,
+                                )
+                                .text_color(content(0.5)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(content(0.55))
+                                    .child("GRAPH"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open = !this.open;
+                                cx.notify();
+                            })),
+                    )
+                    .when(open, |d| d.child(self.actions(can_refresh, cx)))
                 } else {
                     d.child(
                         div()
@@ -309,39 +550,7 @@ impl History {
                             .child(icon("git-branch-hi", 14.).text_color(content(0.45)))
                             .child(div().min_w_0().truncate().child(label)),
                     )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .child(
-                                header_action(
-                                    "history-search",
-                                    "Search history",
-                                    "search",
-                                    14.,
-                                    true,
-                                    false,
-                                )
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.open_search(window, cx)),
-                                ),
-                            )
-                            .child(
-                                header_action(
-                                    "history-refresh",
-                                    "Refresh history",
-                                    "refresh-cw",
-                                    14.,
-                                    can_refresh,
-                                    self.loading,
-                                )
-                                .when(can_refresh, |d| {
-                                    d.on_click(cx.listener(|this, _, _, cx| this.load(cx)))
-                                }),
-                            ),
-                    )
+                    .child(self.actions(can_refresh, cx))
                 }
             }))
             .when_some(self.error.clone(), |d, error| {
@@ -358,6 +567,39 @@ impl History {
                         .child(error),
                 )
             })
+    }
+
+    /// Search and refresh, shared by the tab's toolbar and the section header.
+    fn actions(&self, can_refresh: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .child(
+                header_action(
+                    "history-search",
+                    "Search history",
+                    "search",
+                    14.,
+                    true,
+                    false,
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
+            )
+            .child(
+                header_action(
+                    "history-refresh",
+                    "Refresh history",
+                    "refresh-cw",
+                    14.,
+                    can_refresh,
+                    self.loading,
+                )
+                .when(can_refresh, |d| {
+                    d.on_click(cx.listener(|this, _, _, cx| this.load(cx)))
+                }),
+            )
     }
 
     fn row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -417,6 +659,13 @@ impl History {
                 }
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.select(ix, cx)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_card(ix, event.position, cx);
+                }),
+            )
             .child(
                 canvas(
                     |_, _, _| (),
@@ -712,8 +961,12 @@ impl Render for History {
         let entity = cx.entity();
         div()
             .id("history")
-            .role(Role::TabPanel)
-            .aria_label("History")
+            .role(if self.section {
+                Role::Group
+            } else {
+                Role::TabPanel
+            })
+            .aria_label(if self.section { "Graph" } else { "History" })
             .track_focus(&self.focus)
             .size_full()
             .min_h_0()
@@ -722,7 +975,8 @@ impl Render for History {
             .flex_col()
             .overflow_hidden()
             .child(self.toolbar(cx))
-            .map(|d| match empty {
+            .children(self.card(cx))
+            .when(!self.section || self.open, |d| match empty {
                 Some((text, centred)) => d.child(
                     div()
                         .px_3()
