@@ -224,6 +224,12 @@ fn spawn(cwd: &str, size: GridSize, id: u64, program: Option<Program>) -> Spawne
                 master_fd = pty.file().as_raw_fd();
                 shell_pid = pty.child().id();
             }
+            // The Claude CLI view reads `~/.claude/sessions/<pid>.json` to follow
+            // `/resume` and `/clear`, so Windows needs the child's pid too.
+            #[cfg(windows)]
+            {
+                shell_pid = pty.child_watcher().pid().map_or(0, |pid| pid.get());
+            }
             match EventLoop::new(term.clone(), listener, pty, false, false) {
                 Ok(event_loop) => {
                     let sender = event_loop.channel();
