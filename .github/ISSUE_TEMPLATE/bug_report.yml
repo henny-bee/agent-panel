@@ -1,17 +1,17 @@
 name: Bug report
-description: Report a problem in MonoCode
+description: Report a problem in Agent Panel
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        MonoCode supports macOS, Linux, and Windows.
+        Agent Panel builds on macOS, Linux and Windows. Problems that also happen in the original Monocode belong at https://github.com/hardbeat920/monocode/issues.
 
   - type: input
     id: version
     attributes:
-      label: MonoCode version
-      placeholder: "0.1.0"
+      label: Agent Panel commit
+      placeholder: "9bc68191"
     validations:
       required: true
 
