@@ -246,6 +246,8 @@ pub(crate) struct Conversation {
     worktree_name_cancel: Option<Arc<AtomicBool>>,
     /// The Claude Code CLI shown in place of the chat.
     claude_terminal: Option<claude_terminal::State>,
+    /// What this Claude session did, for the agents and in-this-chat panels.
+    claude_activity: Option<Entity<crate::claude_panels::ClaudeActivity>>,
     _submission: Subscription,
     _alternate_submission: Subscription,
     response_events: Option<Subscription>,
@@ -698,6 +700,7 @@ impl Conversation {
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
             claude_terminal: None,
+            claude_activity: None,
             worktree_name_cancel: None,
             _submission: submission,
             _alternate_submission: alternate_submission,

@@ -27,6 +27,40 @@ impl Conversation {
                         .is_some_and(|preferences| preferences.claude_terminal))
     }
 
+    /// What this session did, read from the files Claude Code writes, so only
+    /// local Claude sessions have it, in the CLI or in the chat view.
+    pub(crate) fn claude_activity(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<crate::claude_panels::ClaudeActivity>> {
+        if Kind::from_id(&self.summary.provider) != Kind::Claude
+            || self.settings.mono.is_some()
+            || self.is_remote()
+        {
+            return None;
+        }
+        let me = cx.entity().downgrade();
+        Some(
+            self.claude_activity
+                .get_or_insert_with(|| {
+                    cx.new(|cx| crate::claude_panels::ClaudeActivity::new(me, cx))
+                })
+                .clone(),
+        )
+    }
+
+    /// The account, Claude session id and working folder the activity
+    /// panels read; none until Claude has a session.
+    pub(crate) fn claude_source(
+        &self,
+    ) -> Option<(monocode_core::accounts::Profile, String, String)> {
+        Some((
+            self.settings.account.clone(),
+            self.summary.provider_id.clone()?,
+            self.execution_cwd().to_owned(),
+        ))
+    }
+
     /// What the keyboard should reach when this session becomes active.
     pub(crate) fn session_focus(&self, cx: &App) -> FocusHandle {
         match &self.claude_terminal {

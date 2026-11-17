@@ -116,6 +116,12 @@ impl Profile {
         if kind == Kind::Claude && claude_entrypoint() {
             command.env("CLAUDE_CODE_ENTRYPOINT", "monocode");
         }
+        // Claude's to-do tools (TaskCreate, TaskUpdate) are off by default; the
+        // in-this-chat panel shows the list they keep. A value set by the
+        // user wins.
+        if kind == Kind::Claude && std::env::var_os("CLAUDE_CODE_ENABLE_TODO_TOOLS").is_none() {
+            command.env("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1");
+        }
         let Some(dir) = self.directory(kind)? else {
             return Ok(());
         };
