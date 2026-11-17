@@ -124,6 +124,9 @@ pub(crate) struct Terminal {
     pub exited: bool,
     size: GridSize,
     geometry: Rc<Cell<Option<Geometry>>>,
+    /// The window whose painted area sizes the PTY. One terminal shown in
+    /// two windows follows the one in use, not whichever painted last.
+    sized_by: Option<gpui::WindowId>,
     master_fd: i32,
     shell_pid: u32,
     selecting: bool,
@@ -342,6 +345,7 @@ impl Terminal {
             exited: false,
             size,
             geometry: Rc::default(),
+            sized_by: None,
             master_fd,
             shell_pid,
             selecting: false,
@@ -917,9 +921,13 @@ impl Element for Grid {
             (((bounds.size.width - px(PADDING * 2.)) / cell_width).floor() as usize).max(2);
         let lines = (((bounds.size.height - px(PADDING)) / line_height).floor() as usize).max(1);
         let cell = size(cell_width, line_height);
+        let here = window.window_handle().window_id();
         let (term, link) = self.terminal.update(cx, |t, _| {
-            t.resize(columns, lines, cell);
-            t.geometry.set(Some(Geometry { origin, cell }));
+            if t.sized_by.is_none_or(|by| by == here) || window.is_window_active() {
+                t.sized_by = Some(here);
+                t.resize(columns, lines, cell);
+                t.geometry.set(Some(Geometry { origin, cell }));
+            }
             let link = t.hover.and_then(|position| t.link_at(position));
             (t.term.clone(), link)
         });

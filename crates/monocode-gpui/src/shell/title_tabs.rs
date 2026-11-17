@@ -667,6 +667,10 @@ mod tests {
                 )
             })
             .unwrap();
+        // A restart: the first window is gone before the restored one opens,
+        // which would otherwise be a second window onto the same app.
+        window.update(cx, |_, window, _| window.remove_window()).unwrap();
+        cx.run_until_parked();
         let restored = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| Shell::new(store, summaries, "/work/monocode".into(), Some(saved), cx))

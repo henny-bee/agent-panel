@@ -249,10 +249,12 @@ impl Shell {
             appearance.background = self.workspace.preferences.chat_background();
         }
         let classic = self.workspace.boxy_layout();
-        chat.update(cx, |session, cx| {
-            session.set_project_appearance(appearance.clone(), cx);
-            session.set_classic_layout(classic, cx);
-        });
+        if self.lays_out(id, cx) {
+            chat.update(cx, |session, cx| {
+                session.set_project_appearance(appearance.clone(), cx);
+                session.set_classic_layout(classic, cx);
+            });
+        }
         let settings = appearance.background.filter(|b| b.opacity(empty) > 0.);
         if settings.is_none() {
             self.backgrounds.remove(&id);

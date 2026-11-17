@@ -39,7 +39,9 @@ impl Shell {
         self.observations.push(cx.subscribe(
             view,
             move |this, _, event: &StartOrchestration, cx| {
-                this.start_orchestration(id, event.0.clone(), cx)
+                if this.acts_for(id, cx) {
+                    this.start_orchestration(id, event.0.clone(), cx)
+                }
             },
         ));
         self.observations.push(

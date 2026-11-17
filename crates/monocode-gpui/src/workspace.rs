@@ -399,6 +399,39 @@ impl Default for Workspace {
     }
 }
 impl Workspace {
+    /// Take the app-wide parts of another window's workspace: settings,
+    /// projects, their look and actions. Tabs, panes and the shown project stay
+    /// this window's. False when nothing differed.
+    pub(crate) fn adopt_shared(&mut self, from: &Workspace) -> bool {
+        fn take<T: Clone + PartialEq>(to: &mut T, from: &T) -> bool {
+            let changed = to != from;
+            if changed {
+                *to = from.clone();
+            }
+            changed
+        }
+        // `|`, not `||`: every field is taken.
+        take(&mut self.preferences, &from.preferences)
+            | take(&mut self.projects, &from.projects)
+            | take(&mut self.archived_projects, &from.archived_projects)
+            | take(&mut self.project_appearance, &from.project_appearance)
+            | take(&mut self.actions, &from.actions)
+            | take(&mut self.last_actions, &from.last_actions)
+            | take(&mut self.project_rail_pinned, &from.project_rail_pinned)
+            | take(&mut self.project_rail_groups, &from.project_rail_groups)
+            | take(&mut self.project_rail_assignments, &from.project_rail_assignments)
+            | take(&mut self.classic_layout, &from.classic_layout)
+            | take(&mut self.new_layout_boxy, &from.new_layout_boxy)
+            | take(&mut self.session_filters, &from.session_filters)
+            | take(&mut self.new_layout_prompt_dismissed, &from.new_layout_prompt_dismissed)
+            | take(&mut self.github_star_prompt_dismissed, &from.github_star_prompt_dismissed)
+    }
+    /// Just the app-wide parts, for handing to another window.
+    pub(crate) fn shared_part(&self) -> Workspace {
+        let mut part = Workspace::default();
+        part.adopt_shared(self);
+        part
+    }
     /// Seed original-rail concepts from the exact desktop preference strings.
     /// Native edits then live in their own persisted fields.
     pub(crate) fn restore_project_rail_metadata(&mut self) {

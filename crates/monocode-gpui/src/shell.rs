@@ -51,6 +51,7 @@ use terminal_panes::terminal_drag_ghost;
 mod title_tabs;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod window_chrome;
+mod windows;
 mod worktrees;
 
 use crate::{
@@ -852,9 +853,12 @@ pub(crate) struct Shell {
     generation: Arc<AtomicU64>,
     latest_state: Arc<Mutex<String>>,
     pub(crate) render_passes: usize,
+    /// This window runs the app's background services and saves the workspace.
+    main: bool,
+    /// Sessions on screen in this window, for the others to keep live.
+    shown: HashSet<i64>,
 }
 impl Shell {
-    #[cfg(test)]
     pub(crate) fn new(
         store: Database,
         summaries: Vec<Session>,
@@ -885,14 +889,26 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::accounts::install(store.clone(), cx);
-        let remote_dir = locked(&store)
+        let main = Self::join_windows(&store, cx);
+        // Later windows share the first window's connections.
+        let remote = match monocode_core::remote::default_connections()
             .ok()
-            .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(|| {
-                std::env::temp_dir().join(format!("monocode-remote-{}", std::process::id()))
-            });
-        let remote = Arc::new(monocode_core::remote::Connections::new(remote_dir));
-        monocode_core::remote::set_default_connections(remote.clone());
+            .filter(|_| !main)
+        {
+            Some(remote) => remote,
+            None => {
+                let remote_dir = locked(&store)
+                    .ok()
+                    .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf))
+                    .unwrap_or_else(|| {
+                        std::env::temp_dir()
+                            .join(format!("monocode-remote-{}", std::process::id()))
+                    });
+                let remote = Arc::new(monocode_core::remote::Connections::new(remote_dir));
+                monocode_core::remote::set_default_connections(remote.clone());
+                remote
+            }
+        };
         let quit_remote = remote.clone();
         cx.on_app_quit(move |_, cx| {
             let remote = quit_remote.clone();
@@ -915,21 +931,34 @@ impl Shell {
             }
         });
         let metadata: Vec<_> = summaries.iter().map(|s| (s.id, s.cwd.clone())).collect();
-        let workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        let mut workspace = Workspace::restore(saved.as_deref(), &metadata, &cwd);
+        if !main {
+            Self::adopt_app_workspace(&mut workspace, &store, cx);
+        }
         monocode_core::cli::initialize(&workspace.preferences.binary_paths);
-        let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
-        let quit_state = latest_state.clone();
-        let quit_store = store.clone();
-        // This application-level hook survives the last window/entity being released.
-        let app: &mut App = cx;
-        app.on_app_quit(move |cx| {
-            let state = quit_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            let store = quit_store.clone();
-            cx.background_executor().spawn(async move {
-                let _ = locked(&store).and_then(|s| s.save_ui_state(&state));
-            })
-        })
-        .detach();
+        // One quit-time save for the app, written by whichever window runs the
+        // services, so a window that took them over is the one restored.
+        let latest_state = match Self::app_state(&store, cx).filter(|_| !main) {
+            Some(state) => state,
+            None => {
+                let latest_state =
+                    Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
+                let quit_state = latest_state.clone();
+                let quit_store = store.clone();
+                // This application-level hook survives the last window/entity being released.
+                let app: &mut App = cx;
+                app.on_app_quit(move |cx| {
+                    let state = quit_state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    let store = quit_store.clone();
+                    cx.background_executor().spawn(async move {
+                        let _ = locked(&store).and_then(|s| s.save_ui_state(&state));
+                    })
+                })
+                .detach();
+                Self::set_app_state(&store, latest_state.clone(), cx);
+                latest_state
+            }
+        };
         let owner = cx.weak_entity();
         let sidebar_frame = cx.new(|_| Chrome {
             owner: owner.clone(),
@@ -958,8 +987,10 @@ impl Shell {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        this.poll_reminders(cx);
-                        this.poll_automations(cx);
+                        if this.main {
+                            this.poll_reminders(cx);
+                            this.poll_automations(cx);
+                        }
                         this.update_chat_visibility(cx);
                         if this.workspace.sidebar_visible {
                             this.notify_sidebar(cx);
@@ -1220,6 +1251,8 @@ impl Shell {
             generation: Arc::new(AtomicU64::new(0)),
             latest_state,
             render_passes: 0,
+            main,
+            shown: HashSet::new(),
         };
         if !cfg!(test) {
             this.scan_external_editors(cx);
@@ -1227,6 +1260,64 @@ impl Shell {
         this.observe_accounts(cx);
         this.load_note_count(cx);
         this.observe_picker_preferences(cx);
+        if this.main {
+            this.start_monos(cx);
+        }
+        this.bind_notices(cx);
+        if this.main {
+            this.init_app_bridge(cx);
+        }
+        // A window without Monos of its own still leaves their sessions out.
+        let monos = this.app_monos(cx);
+        for summary in summaries {
+            if monos
+                .as_ref()
+                .is_some_and(|m| m.read(cx).is_mono_session(summary.id))
+            {
+                continue;
+            }
+            this.order.push(summary.id);
+            this.session_summaries.insert(summary.id, summary);
+        }
+        if this.main {
+            this.init_mobile_host(cx);
+        }
+        if let Some(id) = this.workspace.active {
+            this.ensure_session(this.workspace.session_for_pane(id), cx);
+            this.record_worktree_session(id, cx);
+        }
+        if let Some(id) = this.workspace.active {
+            this.history.record(id);
+        }
+        this.reveal_active_tab(cx);
+        this.update_chat_visibility(cx);
+        this.update_usage_provider(cx);
+        this.apply_preferences(cx);
+        if this.main {
+            this.poll_reminders(cx);
+            this.initialize_automations(cx);
+        }
+        cx.on_release(|this, cx| {
+            if this.main {
+                let store = this.store.clone();
+                cx.defer(move |cx| Shell::hand_over_services(&store, cx));
+            }
+        })
+        .detach();
+        if this.workspace.active.is_none() {
+            cx.spawn(async move |this, cx| {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.ensure_project_session(window, cx);
+                    this.persist(cx);
+                });
+            })
+            .detach();
+        }
+        this
+    }
+    /// The Mono agents and their heartbeats, run by the services window.
+    fn start_monos(&mut self, cx: &mut Context<Self>) {
+        let this = self;
         let mono_owner = cx.weak_entity();
         let mono_active =
             this.workspace
@@ -1301,43 +1392,6 @@ impl Shell {
                 }
             }));
         this.monos = Some(monos);
-        this.bind_notices(cx);
-        this.init_app_bridge(cx);
-        for summary in summaries {
-            if this
-                .monos
-                .as_ref()
-                .is_some_and(|m| m.read(cx).is_mono_session(summary.id))
-            {
-                continue;
-            }
-            this.order.push(summary.id);
-            this.session_summaries.insert(summary.id, summary);
-        }
-        this.init_mobile_host(cx);
-        if let Some(id) = this.workspace.active {
-            this.ensure_session(this.workspace.session_for_pane(id), cx);
-            this.record_worktree_session(id, cx);
-        }
-        if let Some(id) = this.workspace.active {
-            this.history.record(id);
-        }
-        this.reveal_active_tab(cx);
-        this.update_chat_visibility(cx);
-        this.update_usage_provider(cx);
-        this.apply_preferences(cx);
-        this.poll_reminders(cx);
-        this.initialize_automations(cx);
-        if this.workspace.active.is_none() {
-            cx.spawn(async move |this, cx| {
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.ensure_project_session(window, cx);
-                    this.persist(cx);
-                });
-            })
-            .detach();
-        }
-        this
     }
     fn update_chat_visibility(&mut self, cx: &mut Context<Self>) {
         if let Some(inbox) = &self.inbox {
@@ -1381,6 +1435,8 @@ impl Shell {
             self.history_clock += 1;
             self.history_recency.insert(id, self.history_clock);
         }
+        self.shown = shown.clone();
+        let shown = self.shown_anywhere(shown, cx);
         for (&id, view) in &self.sessions {
             view.update(cx, |v, cx| {
                 if shown.contains(&id) {
@@ -1407,22 +1463,31 @@ impl Shell {
             .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
         self.tab_marks
             .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
-        let appearance = self.appearance(&summary.cwd);
-        let worktree = self.session_worktrees.get(&id).cloned().flatten();
-        let view = cx.new(|cx| Conversation::new(summary, self.store.clone(), cx));
-        view.update(cx, |view, cx| {
-            // Events may arrive before the first asynchronous agent load. Seed
-            // the indexed working directory so those events cannot erase it.
-            view.restore_worktree(worktree, None, cx);
-            view.draft_hint = self.draft_sessions.contains(&id);
-            if let Some(bridge) = &self.app_bridge {
-                view.set_app_environment(bridge.environment(id));
+        // Another window's live view, so its agent or CLI keeps running once.
+        let view = match self.shared_session(id, cx) {
+            Some(view) => view,
+            None => {
+                let appearance = self.appearance(&summary.cwd);
+                let worktree = self.session_worktrees.get(&id).cloned().flatten();
+                let environment = self.app_environment(id, cx);
+                let view = cx.new(|cx| Conversation::new(summary, self.store.clone(), cx));
+                view.update(cx, |view, cx| {
+                    // Events may arrive before the first asynchronous agent load. Seed
+                    // the indexed working directory so those events cannot erase it.
+                    view.restore_worktree(worktree, None, cx);
+                    view.draft_hint = self.draft_sessions.contains(&id);
+                    if let Some(environment) = environment {
+                        view.set_app_environment(environment);
+                    }
+                    view.set_project_appearance(appearance, cx);
+                    view.transcript.update(cx, |transcript, cx| {
+                        transcript.apply_preferences(&self.workspace.preferences, cx)
+                    });
+                });
+                self.share_session(id, &view, cx);
+                view
             }
-            view.set_project_appearance(appearance, cx);
-            view.transcript.update(cx, |transcript, cx| {
-                transcript.apply_preferences(&self.workspace.preferences, cx)
-            });
-        });
+        };
         self.observations
             .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
                 let Some(view) = this.sessions.get(&id) else {
@@ -1437,10 +1502,14 @@ impl Shell {
                 }
                 this.sync_search_session(id, cx);
                 this.orchestration_session_changed(id, cx);
-                this.automation_session_changed(id, cx);
+                if this.main {
+                    this.automation_session_changed(id, cx);
+                }
                 this.sync_review_locks(cx);
                 this.refresh_session_mark(id, cx);
-                this.notification_session_changed(id, cx);
+                if this.main {
+                    this.notification_session_changed(id, cx);
+                }
                 this.update_usage_provider(cx);
                 this.update_chat_visibility(cx);
                 this.invalidate_chrome(cx);
@@ -1463,12 +1532,17 @@ impl Shell {
             },
         ));
         self.observations
-            .push(cx.subscribe(&view, |this, _, transfer: &Transfer, cx| {
-                this.transfer_response(transfer.clone(), cx)
+            .push(cx.subscribe(&view, move |this, _, transfer: &Transfer, cx| {
+                if this.acts_for(id, cx) {
+                    this.transfer_response(transfer.clone(), cx)
+                }
             }));
         self.observations.push(cx.subscribe(
             &view,
             move |this, _, event: &crate::conversation::OpenSessionChanges, cx| {
+                if !this.acts_for(id, cx) {
+                    return;
+                }
                 let tab = event.0.clone();
                 // The card's pane takes focus, so its review opens beside it.
                 this.pending_review = Some((id, tab));
@@ -2872,7 +2946,9 @@ impl Shell {
             .as_ref()
             .map(|(_, _, _, review)| review.clone())
             .or_else(|| self.review_for(id, cx));
-        if let Some(chat) = &chat {
+        if let Some(chat) = &chat
+            && self.lays_out(id, cx)
+        {
             let beside = in_split || review.is_some();
             chat.update(cx, |session, cx| session.set_beside_pane(beside, cx));
         }
@@ -4231,6 +4307,14 @@ impl Shell {
         }
     }
     fn save_state(&mut self, cx: &mut Context<Self>) {
+        self.share_workspace(cx);
+        self.write_state(cx);
+    }
+    /// Only the services window saves; another window's layout lasts while it is open.
+    fn write_state(&mut self, cx: &mut Context<Self>) {
+        if !self.main {
+            return;
+        }
         let state = serde_json::to_string(&self.workspace).unwrap();
         *self.latest_state.lock().unwrap_or_else(|e| e.into_inner()) = state.clone();
         let revision = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -8861,13 +8945,21 @@ impl Render for Shell {
                     window.focus(&target, cx);
                 }));
             self.window_active = window.is_window_active();
+            if self.window_active {
+                self.window_used(cx);
+            }
             self.observations
                 .push(cx.observe_window_activation(window, |this, window, cx| {
                     this.window_active = window.is_window_active();
+                    if this.window_active {
+                        this.window_used(cx);
+                    }
                     this.refresh_notification_permission();
                     cx.notify();
                 }));
-            self.start_native_notifications(cx);
+            if self.main {
+                self.start_native_notifications(cx);
+            }
             self.check_github_star(false, cx);
             let shell = cx.entity().downgrade();
             window.on_window_should_close(cx, move |window, cx| {

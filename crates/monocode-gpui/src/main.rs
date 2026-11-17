@@ -44,6 +44,8 @@ mod image_memory;
 mod inbox;
 mod ink_field;
 mod input;
+#[cfg(unix)]
+mod instance;
 mod markdown;
 mod markdown_model;
 #[cfg(target_os = "macos")]
@@ -305,6 +307,14 @@ fn main() {
         );
         std::process::exit(2);
     }
+    // Launched again: the running app opens another window onto the same
+    // live sessions instead of this process starting a second copy of them.
+    #[cfg(unix)]
+    let socket = database.with_file_name("monocode-native.sock");
+    #[cfg(unix)]
+    if !check_data && !(fixture || chat_fixture || visual_fixture) && instance::hand_off(&socket) {
+        return;
+    }
     let mut db = if check_data {
         Store::read_monocode(&database)
     } else {
@@ -458,13 +468,96 @@ fn main() {
             })
             .detach();
             let bounds = workspace.window.bounds(cx);
-            cx.open_window(
+            let decorations = workspace
+                .preferences
+                .wayland_decorations(cx.compositor_name());
+            #[cfg(unix)]
+            let windows_db = db.clone();
+            open_shell_window(bounds, decorations, cx, |window, cx| {
+                // Install the menu one frame later, after the first frame presents.
+                window.on_next_frame(|window, _| {
+                    window.on_next_frame(|_, cx| app_menu::ready(cx));
+                });
+                // Off the launch path: it lists every conversation folder.
+                let cleanup = db.clone();
+                window.on_next_frame(move |_, cx| {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let result = cleanup
+                                .lock()
+                                .map_err(|error| error.to_string())
+                                .and_then(|store| store.sweep_thread_dirs());
+                            if let Err(error) = result {
+                                eprintln!("Cannot clean up deleted conversations' files: {error}");
+                            }
+                        })
+                        .detach();
+                });
+                cx.new(|cx| {
+                    shell::Shell::new_with_metadata(
+                        db,
+                        sessions,
+                        cwd,
+                        saved,
+                        sidebar_metadata,
+                        cx,
+                    )
+                })
+            })
+            .expect("open GPUI window");
+            #[cfg(unix)]
+            if let Some(requests) = instance::listen(&socket) {
+                cx.spawn(async move |cx| {
+                    while requests.recv().await.is_ok() {
+                        let db = windows_db.clone();
+                        cx.update(|cx| open_another_window(db, cx));
+                    }
+                })
+                .detach();
+            }
+            cx.activate(true);
+        });
+}
+
+/// Another window onto the running app, starting from the saved workspace. It
+/// shows the same live sessions as the others.
+#[cfg(unix)]
+fn open_another_window(db: Arc<Mutex<Store>>, cx: &mut App) {
+    let (sessions, saved) = match db.lock() {
+        Ok(store) => (
+            store.sessions().unwrap_or_default(),
+            store.ui_state().ok().flatten(),
+        ),
+        Err(_) => return,
+    };
+    let metadata = sessions
+        .iter()
+        .map(|s| (s.id, s.cwd.clone()))
+        .collect::<Vec<_>>();
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let workspace = workspace::Workspace::restore(saved.as_deref(), &metadata, &home);
+    let bounds = workspace.window.bounds(cx);
+    let decorations = workspace
+        .preferences
+        .wayland_decorations(cx.compositor_name());
+    if let Err(error) = open_shell_window(bounds, decorations, cx, |_, cx| {
+        cx.new(|cx| shell::Shell::new(db, sessions, workspace.project, saved, cx))
+    }) {
+        eprintln!("Cannot open another window: {error}");
+    }
+}
+
+fn open_shell_window(
+    bounds: gpui::WindowBounds,
+    decorations: Option<gpui::WindowDecorations>,
+    cx: &mut App,
+    build: impl FnOnce(&mut gpui::Window, &mut App) -> gpui::Entity<shell::Shell>,
+) -> Result<(), String> {
+    cx.open_window(
                 WindowOptions {
                     window_bounds: Some(bounds),
                     window_min_size: Some(size(px(820.), px(520.))),
-                    window_decorations: workspace
-                        .preferences
-                        .wayland_decorations(cx.compositor_name()),
+                    window_decorations: decorations,
                     // Linux desktops match this to the .desktop file's
                     // StartupWMClass to show the app icon.
                     app_id: Some("dev.usemono.gpui".into()),
@@ -506,37 +599,7 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    // Install the menu one frame later, after the first frame presents.
-                    window.on_next_frame(|window, _| {
-                        window.on_next_frame(|_, cx| app_menu::ready(cx));
-                    });
-                    // Off the launch path: it lists every conversation folder.
-                    let cleanup = db.clone();
-                    window.on_next_frame(move |_, cx| {
-                        cx.background_executor()
-                            .spawn(async move {
-                                let result = cleanup
-                                    .lock()
-                                    .map_err(|error| error.to_string())
-                                    .and_then(|store| store.sweep_thread_dirs());
-                                if let Err(error) = result {
-                                    eprintln!(
-                                        "Cannot clean up deleted conversations' files: {error}"
-                                    );
-                                }
-                            })
-                            .detach();
-                    });
-                    let shell = cx.new(|cx| {
-                        shell::Shell::new_with_metadata(
-                            db,
-                            sessions,
-                            cwd,
-                            saved,
-                            sidebar_metadata,
-                            cx,
-                        )
-                    });
+                    let shell = build(window, cx);
                     shell.update(cx, |shell, cx| shell.focus_active(window, cx));
                     #[cfg(target_os = "macos")]
                     {
@@ -553,9 +616,8 @@ fn main() {
                     shell
                 },
             )
-            .expect("open GPUI window");
-            cx.activate(true);
-        });
+            .map(|_| ())
+            .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

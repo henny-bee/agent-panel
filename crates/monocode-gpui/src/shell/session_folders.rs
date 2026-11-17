@@ -205,8 +205,10 @@ impl Shell {
         self.observations.push(cx.subscribe(
             view,
             move |this, _, event: &crate::conversation::ChooseFolder, cx| {
-                this.pending_folder = Some((id, event.0.clone()));
-                cx.notify();
+                if this.acts_for(id, cx) {
+                    this.pending_folder = Some((id, event.0.clone()));
+                    cx.notify();
+                }
             },
         ));
     }
