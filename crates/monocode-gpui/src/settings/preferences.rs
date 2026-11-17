@@ -172,7 +172,9 @@ impl Default for Preferences {
             mask_emails: true,
             idle_agents: 3,
             claude_hooks: true,
-            claude_terminal: true,
+            // Tests drive the composer, which the CLI replaces, and must not
+            // start a real `claude`; a test of the CLI view turns it on.
+            claude_terminal: !cfg!(test),
             claude_entrypoint: false,
             binary_paths: HashMap::new(),
             disabled_skill_paths: Vec::new(),
