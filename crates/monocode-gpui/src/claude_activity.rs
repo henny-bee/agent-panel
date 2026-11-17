@@ -88,29 +88,46 @@ pub(crate) struct Snapshot {
     pub skills: Vec<(String, u32)>,
 }
 
-/// A list that keeps first-seen order and counts repeats.
+/// When something was used: its transcript time, then its line, which orders
+/// uses within the same millisecond.
+type At = (i64, u64);
+
+/// A list that keeps first-seen order, counts repeats and remembers when each
+/// item was last used.
 #[derive(Default)]
 struct Tally {
     order: Vec<String>,
     counts: HashMap<String, u32>,
+    last: HashMap<String, At>,
 }
 impl Tally {
-    fn add(&mut self, key: &str) {
-        self.add_n(key, 1);
+    fn add(&mut self, key: &str, at: At) {
+        self.add_n(key, 1, at);
     }
-    fn add_n(&mut self, key: &str, n: u32) {
+    fn add_n(&mut self, key: &str, n: u32, at: At) {
         match self.counts.get_mut(key) {
-            Some(count) => *count += n,
+            Some(count) => {
+                *count += n;
+                let last = self.last.get_mut(key).expect("counted keys have a time");
+                *last = (*last).max(at);
+            }
             None => {
                 self.order.push(key.to_owned());
                 self.counts.insert(key.to_owned(), n);
+                self.last.insert(key.to_owned(), at);
             }
         }
     }
     fn merge(&mut self, other: &Tally) {
         for key in &other.order {
-            self.add_n(key, other.counts[key]);
+            self.add_n(key, other.counts[key], other.last[key]);
         }
+    }
+    /// The items, most recently used first.
+    fn recent(&self) -> Vec<String> {
+        let mut keys = self.order.clone();
+        keys.sort_by_key(|key| std::cmp::Reverse(self.last[key]));
+        keys
     }
 }
 
@@ -305,6 +322,8 @@ struct Log {
     agent: bool,
     first: i64,
     last: i64,
+    /// Lines read so far, to order uses that share a timestamp.
+    lines: u64,
     /// Usage per API call; a call's blocks are separate lines that repeat it.
     usage: HashMap<String, (String, Usage)>,
     model: String,
@@ -313,8 +332,9 @@ struct Log {
     tool_ids: HashSet<String>,
     tools: Tally,
     files: [Tally; 4],
-    /// Write calls by id; the result says whether the file was new.
-    writes: Vec<(String, String)>,
+    /// Write calls by id, with their path and time; the result says whether
+    /// the file was new.
+    writes: Vec<(String, String, At)>,
     created: HashSet<String>,
     skills: Tally,
     context: Tally,
@@ -373,7 +393,13 @@ impl Log {
         self.partial = buffer;
     }
 
+    /// Now, as far as this transcript has been read.
+    fn at(&self) -> At {
+        (self.last, self.lines)
+    }
+
     fn line(&mut self, line: &str) {
+        self.lines += 1;
         // Keys follow the message, so the entry's own time is the last one.
         if let Some(at) = line.rfind("\"timestamp\":\"")
             && let Some(time) = line.get(at + 13..at + 13 + 24).and_then(millis)
@@ -405,10 +431,9 @@ impl Log {
                     .into_iter()
                     .flatten()
                 {
-                    if let Some(path) = file["path"].as_str()
-                        && !self.context.counts.contains_key(path)
-                    {
-                        self.context.add(path);
+                    if let Some(path) = file["path"].as_str() {
+                        // Loaded again: it moves back to the top.
+                        self.context.add(path, self.at());
                     }
                 }
             }
@@ -445,7 +470,8 @@ impl Log {
     }
 
     fn tool(&mut self, id: &str, name: &str, input: &Value) {
-        self.tools.add(name);
+        let at = self.at();
+        self.tools.add(name, at);
         if self.agent {
             self.steps.push(step(name, input));
         }
@@ -453,21 +479,21 @@ impl Log {
         match name {
             "Read" => path("file_path")
                 .into_iter()
-                .for_each(|p| self.files[0].add(p)),
+                .for_each(|p| self.files[0].add(p, at)),
             "Edit" | "MultiEdit" => path("file_path")
                 .into_iter()
-                .for_each(|p| self.files[1].add(p)),
+                .for_each(|p| self.files[1].add(p, at)),
             "NotebookEdit" => path("notebook_path")
                 .into_iter()
-                .for_each(|p| self.files[1].add(p)),
+                .for_each(|p| self.files[1].add(p, at)),
             "Write" => {
                 if let Some(path) = path("file_path") {
-                    self.writes.push((id.to_owned(), path.to_owned()));
+                    self.writes.push((id.to_owned(), path.to_owned(), at));
                 }
             }
             "Skill" => {
                 if let Some(skill) = input["skill"].as_str() {
-                    self.skills.add(skill.trim_start_matches('/'));
+                    self.skills.add(skill.trim_start_matches('/'), at);
                 }
             }
             "TodoWrite" => {
@@ -500,7 +526,8 @@ impl Log {
         if text.trim_start().starts_with("<command-message>")
             && let Some(name) = tag(&text, "command-name")
         {
-            self.skills.add(name.trim_start_matches('/'));
+            let at = self.at();
+            self.skills.add(name.trim_start_matches('/'), at);
         }
         let time = entry["timestamp"]
             .as_str()
@@ -615,8 +642,8 @@ impl Tracker {
             for (kind, tally) in log.files.iter().enumerate() {
                 files[kind].merge(tally);
             }
-            for (id, path) in &log.writes {
-                files[if log.created.contains(id) { 2 } else { 3 }].add(path);
+            for (id, path, at) in &log.writes {
+                files[if log.created.contains(id) { 2 } else { 3 }].add(path, *at);
             }
             skills.merge(&log.skills);
             context.merge(&log.context);
@@ -647,12 +674,16 @@ impl Tracker {
                 .unwrap_or_default(),
             mcp,
             tools: builtin,
-            files: files.map(|tally| tally.order),
-            context: context.order,
+            // Most recently used first; tools and MCP keep first-use order.
+            files: files.map(|tally| tally.recent()),
+            context: context.recent(),
             skills: skills
-                .order
-                .iter()
-                .map(|name| (name.clone(), skills.counts[name]))
+                .recent()
+                .into_iter()
+                .map(|name| {
+                    let uses = skills.counts[&name];
+                    (name, uses)
+                })
                 .collect(),
         }
     }
@@ -822,6 +853,37 @@ mod tests {
         log.pull(&path);
         assert_eq!(log.tokens(), 10);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lists_files_most_recently_used_first_across_agents() {
+        let read = |id: &str, path: &str, second: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{id}","name":"Read","input":{{"file_path":"{path}"}}}}]}},"timestamp":"2026-11-17T10:00:{second}.000Z"}}"#
+            )
+        };
+        let mut main = Log::default();
+        feed(
+            &mut main,
+            &[
+                &read("r1", "/p/a.rs", "01"),
+                &read("r2", "/p/b.rs", "02"),
+                &read("r3", "/p/a.rs", "03"),
+            ],
+        );
+        assert_eq!(
+            main.files[0].recent(),
+            ["/p/a.rs", "/p/b.rs"],
+            "a file read again moves back to the top"
+        );
+        // An agent's later read comes first, whichever log it is in.
+        let mut agent = Log::agent();
+        feed(&mut agent, &[&read("r4", "/p/c.rs", "04")]);
+        let mut merged = Tally::default();
+        merged.merge(&main.files[0]);
+        merged.merge(&agent.files[0]);
+        assert_eq!(merged.recent(), ["/p/c.rs", "/p/a.rs", "/p/b.rs"]);
+        assert_eq!(merged.counts["/p/a.rs"], 2);
     }
 
     #[test]
