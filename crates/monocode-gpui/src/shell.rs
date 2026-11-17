@@ -901,8 +901,7 @@ impl Shell {
                     .ok()
                     .and_then(|store| store.data_dir().map(std::path::Path::to_path_buf))
                     .unwrap_or_else(|| {
-                        std::env::temp_dir()
-                            .join(format!("monocode-remote-{}", std::process::id()))
+                        std::env::temp_dir().join(format!("monocode-remote-{}", std::process::id()))
                     });
                 let remote = Arc::new(monocode_core::remote::Connections::new(remote_dir));
                 monocode_core::remote::set_default_connections(remote.clone());
@@ -941,8 +940,7 @@ impl Shell {
         let latest_state = match Self::app_state(&store, cx).filter(|_| !main) {
             Some(state) => state,
             None => {
-                let latest_state =
-                    Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
+                let latest_state = Arc::new(Mutex::new(serde_json::to_string(&workspace).unwrap()));
                 let quit_state = latest_state.clone();
                 let quit_store = store.clone();
                 // This application-level hook survives the last window/entity being released.
@@ -1531,12 +1529,13 @@ impl Shell {
                 cx.notify();
             },
         ));
-        self.observations
-            .push(cx.subscribe(&view, move |this, _, transfer: &Transfer, cx| {
+        self.observations.push(
+            cx.subscribe(&view, move |this, _, transfer: &Transfer, cx| {
                 if this.acts_for(id, cx) {
                     this.transfer_response(transfer.clone(), cx)
                 }
-            }));
+            }),
+        );
         self.observations.push(cx.subscribe(
             &view,
             move |this, _, event: &crate::conversation::OpenSessionChanges, cx| {

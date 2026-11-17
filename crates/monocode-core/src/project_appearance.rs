@@ -619,7 +619,11 @@ mod tests {
     fn frost_softens_edges_keeps_the_size_and_grows_with_strength() {
         // One hard edge: black on the left, white on the right.
         let source = RgbaImage::from_fn(400, 200, |x, _| {
-            image::Rgba(if x < 200 { [0, 0, 0, 255] } else { [255, 255, 255, 255] })
+            image::Rgba(if x < 200 {
+                [0, 0, 0, 255]
+            } else {
+                [255, 255, 255, 255]
+            })
         });
         assert_eq!(frost(source.clone(), 0), source);
         // How many columns the edge is smeared across.

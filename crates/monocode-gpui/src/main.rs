@@ -494,14 +494,7 @@ fn main() {
                         .detach();
                 });
                 cx.new(|cx| {
-                    shell::Shell::new_with_metadata(
-                        db,
-                        sessions,
-                        cwd,
-                        saved,
-                        sidebar_metadata,
-                        cx,
-                    )
+                    shell::Shell::new_with_metadata(db, sessions, cwd, saved, sidebar_metadata, cx)
                 })
             })
             .expect("open GPUI window");
@@ -554,70 +547,70 @@ fn open_shell_window(
     build: impl FnOnce(&mut gpui::Window, &mut App) -> gpui::Entity<shell::Shell>,
 ) -> Result<(), String> {
     cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(bounds),
-                    window_min_size: Some(size(px(820.), px(520.))),
-                    window_decorations: decorations,
-                    // Linux desktops match this to the .desktop file's
-                    // StartupWMClass to show the app icon.
-                    app_id: Some("dev.usemono.gpui".into()),
-                    // X11 taskbars show the window's own icon, not that file's.
-                    icon: cfg!(target_os = "linux")
-                        .then(|| {
-                            image::load_from_memory_with_format(
-                                include_bytes!("../assets/monocode.png"),
-                                image::ImageFormat::Png,
-                            )
-                            .ok()
-                        })
-                        .flatten()
-                        .map(|icon| {
-                            std::sync::Arc::new(image::imageops::resize(
-                                &icon.to_rgba8(),
-                                128,
-                                128,
-                                image::imageops::FilterType::Nearest,
-                            ))
-                        }),
-                    window_background: theme::window_backdrop(true),
-                    // GPUI owns the custom chrome. AppKit must not reinterpret
-                    // its controls as native titlebar double-click/drag gestures.
-                    app_owns_titlebar_drag: cfg!(target_os = "macos"),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Monocode Native".into()),
-                        // Windows also drops its caption: the app's drag areas
-                        // hit-test as the caption and the frame still resizes.
-                        appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
-                        traffic_light_position: if cfg!(target_os = "macos") {
-                            // Original macOS chrome: 12 pt left inset, with
-                            // 14 pt native buttons centered in the 40 pt bar.
-                            Some(point(px(12.), px((theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
-                        } else {
-                            None
-                        },
-                    }),
-                    ..Default::default()
+        WindowOptions {
+            window_bounds: Some(bounds),
+            window_min_size: Some(size(px(820.), px(520.))),
+            window_decorations: decorations,
+            // Linux desktops match this to the .desktop file's
+            // StartupWMClass to show the app icon.
+            app_id: Some("dev.usemono.gpui".into()),
+            // X11 taskbars show the window's own icon, not that file's.
+            icon: cfg!(target_os = "linux")
+                .then(|| {
+                    image::load_from_memory_with_format(
+                        include_bytes!("../assets/monocode.png"),
+                        image::ImageFormat::Png,
+                    )
+                    .ok()
+                })
+                .flatten()
+                .map(|icon| {
+                    std::sync::Arc::new(image::imageops::resize(
+                        &icon.to_rgba8(),
+                        128,
+                        128,
+                        image::imageops::FilterType::Nearest,
+                    ))
+                }),
+            window_background: theme::window_backdrop(true),
+            // GPUI owns the custom chrome. AppKit must not reinterpret
+            // its controls as native titlebar double-click/drag gestures.
+            app_owns_titlebar_drag: cfg!(target_os = "macos"),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Monocode Native".into()),
+                // Windows also drops its caption: the app's drag areas
+                // hit-test as the caption and the frame still resizes.
+                appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
+                traffic_light_position: if cfg!(target_os = "macos") {
+                    // Original macOS chrome: 12 pt left inset, with
+                    // 14 pt native buttons centered in the 40 pt bar.
+                    Some(point(px(12.), px((theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
+                } else {
+                    None
                 },
-                |window, cx| {
-                    let shell = build(window, cx);
-                    shell.update(cx, |shell, cx| shell.focus_active(window, cx));
-                    #[cfg(target_os = "macos")]
-                    {
-                        traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);
-                        // AppKit rebuilds the buttons on some titlebar changes.
-                        shell.update(cx, |_, cx| {
-                            cx.observe_window_activation(window, |_, window, _| {
-                                traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT)
-                            })
-                            .detach();
-                        });
-                    }
-                    window.activate_window();
-                    shell
-                },
-            )
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            }),
+            ..Default::default()
+        },
+        |window, cx| {
+            let shell = build(window, cx);
+            shell.update(cx, |shell, cx| shell.focus_active(window, cx));
+            #[cfg(target_os = "macos")]
+            {
+                traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);
+                // AppKit rebuilds the buttons on some titlebar changes.
+                shell.update(cx, |_, cx| {
+                    cx.observe_window_activation(window, |_, window, _| {
+                        traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT)
+                    })
+                    .detach();
+                });
+            }
+            window.activate_window();
+            shell
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

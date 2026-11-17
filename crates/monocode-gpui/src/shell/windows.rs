@@ -44,14 +44,19 @@ impl Shell {
         let key = app_key(store);
         let shell = cx.weak_entity();
         let windows = cx.default_global::<Windows>();
-        windows.shells.retain(|(_, shell)| shell.upgrade().is_some());
+        windows
+            .shells
+            .retain(|(_, shell)| shell.upgrade().is_some());
         let first = !windows.shells.iter().any(|(app, _)| *app == key);
         windows.shells.push((key, shell));
         first
     }
     /// The app's quit-time workspace, once the services window made it.
     pub(super) fn app_state(store: &Database, cx: &App) -> Option<Arc<Mutex<String>>> {
-        cx.try_global::<Windows>()?.states.get(&app_key(store)).cloned()
+        cx.try_global::<Windows>()?
+            .states
+            .get(&app_key(store))
+            .cloned()
     }
     pub(super) fn set_app_state(store: &Database, state: Arc<Mutex<String>>, cx: &mut App) {
         cx.default_global::<Windows>()
@@ -80,7 +85,12 @@ impl Shell {
     /// Offer a new live view to the other windows. The services window watches
     /// it too, so a turn finishing here still notifies and automation runs
     /// still complete; the others list the session in their sidebars.
-    pub(super) fn share_session(&self, id: i64, view: &Entity<Conversation>, cx: &mut Context<Self>) {
+    pub(super) fn share_session(
+        &self,
+        id: i64,
+        view: &Entity<Conversation>,
+        cx: &mut Context<Self>,
+    ) {
         let sessions = &mut cx.default_global::<Windows>().sessions;
         sessions.retain(|_, view| view.upgrade().is_some());
         sessions.insert((app_key(&self.store), id), view.downgrade());
@@ -95,8 +105,10 @@ impl Shell {
                 other.update(cx, |other, cx| {
                     if other.main {
                         other.add_loaded(summary.clone(), cx);
-                    } else if !other.session_summaries.contains_key(&id) {
-                        other.session_summaries.insert(id, summary.clone());
+                    } else if let std::collections::hash_map::Entry::Vacant(entry) =
+                        other.session_summaries.entry(id)
+                    {
+                        entry.insert(summary.clone());
                         other.order.push(id);
                     }
                     other.invalidate_chrome(cx);
@@ -135,14 +147,22 @@ impl Shell {
         true
     }
     /// A new window starts from the app-wide settings the others already use.
-    pub(super) fn adopt_app_workspace(workspace: &mut Workspace, store: &Database, cx: &Context<Self>) {
+    pub(super) fn adopt_app_workspace(
+        workspace: &mut Workspace,
+        store: &Database,
+        cx: &Context<Self>,
+    ) {
         if let Some(other) = others(cx.entity_id(), store, cx).first() {
             workspace.adopt_shared(&other.read(cx).workspace);
         }
     }
     /// Sessions on screen in any window. One hidden here may show in another,
     /// and must keep its history and stay live there.
-    pub(super) fn shown_anywhere(&self, mut shown: HashSet<i64>, cx: &Context<Self>) -> HashSet<i64> {
+    pub(super) fn shown_anywhere(
+        &self,
+        mut shown: HashSet<i64>,
+        cx: &Context<Self>,
+    ) -> HashSet<i64> {
         for other in others(cx.entity_id(), &self.store, cx) {
             shown.extend(other.read(cx).shown.iter().copied());
         }
@@ -157,7 +177,11 @@ impl Shell {
         })
     }
     /// The app bridge settings a session's tools reach this app through.
-    pub(super) fn app_environment(&self, id: i64, cx: &Context<Self>) -> Option<HashMap<String, String>> {
+    pub(super) fn app_environment(
+        &self,
+        id: i64,
+        cx: &Context<Self>,
+    ) -> Option<HashMap<String, String>> {
         match &self.app_bridge {
             Some(bridge) => Some(bridge.environment(id)),
             None => others(cx.entity_id(), &self.store, cx)
@@ -239,9 +263,7 @@ mod tests {
     #[gpui::test]
     fn windows_share_live_sessions_and_settings_and_hand_over_services(cx: &mut TestAppContext) {
         let (first, a, _) = super::super::tests::window(cx);
-        let store = first
-            .update(cx, |shell, _, _| shell.store.clone())
-            .unwrap();
+        let store = first.update(cx, |shell, _, _| shell.store.clone()).unwrap();
         let summaries = locked(&store).unwrap().sessions().unwrap();
         let second = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {
@@ -260,7 +282,10 @@ mod tests {
                 assert!(!shell.main && shell.monos.is_none());
                 let shared = shell.ensure_session(a, cx).unwrap();
                 assert_eq!(shared.entity_id(), view.entity_id(), "one live view");
-                assert!(!shell.acts_for(a, cx), "the first window acts until another is used");
+                assert!(
+                    !shell.acts_for(a, cx),
+                    "the first window acts until another is used"
+                );
                 shell.window_used(cx);
                 assert!(shell.acts_for(a, cx));
                 shell.workspace.preferences.sounds = !shell.workspace.preferences.sounds;
@@ -301,9 +326,7 @@ mod tests {
             })
             .unwrap()
         });
-        other
-            .update(cx, |shell, _, _| assert!(shell.main))
-            .unwrap();
+        other.update(cx, |shell, _, _| assert!(shell.main)).unwrap();
         first
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();

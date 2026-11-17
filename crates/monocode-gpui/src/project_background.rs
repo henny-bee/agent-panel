@@ -548,7 +548,9 @@ mod tests {
             })
             .unwrap()
         });
-        let view = window.update(cx, |surface, _, _| surface.0.clone()).unwrap();
+        let view = window
+            .update(cx, |surface, _, _| surface.0.clone())
+            .unwrap();
         for _ in 0..2 {
             cx.refresh().unwrap();
             cx.run_until_parked();
@@ -582,7 +584,11 @@ mod tests {
         }
         view.read_with(cx, |background, _| {
             assert!(!background.loading);
-            assert_eq!(background.key.as_ref().unwrap().blur, 80, "the latest strength wins");
+            assert_eq!(
+                background.key.as_ref().unwrap().blur,
+                80,
+                "the latest strength wins"
+            );
             assert!(!Arc::ptr_eq(background.image.as_ref().unwrap(), &sharp));
         });
     }

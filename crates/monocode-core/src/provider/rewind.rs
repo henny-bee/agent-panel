@@ -565,11 +565,9 @@ mod tests {
         // The local message must be the one Claude stored last.
         assert!(claude_boundary(&transcript, "First").is_err());
         let first = claude_line("p1", None, "user", json!("First"));
-        assert!(
-            claude_boundary(&first, "First")
-                .unwrap_err()
-                .contains("first message")
-        );
+        assert!(claude_boundary(&first, "First")
+            .unwrap_err()
+            .contains("first message"));
         assert!(claude_boundary("", "First").is_err());
     }
     #[test]

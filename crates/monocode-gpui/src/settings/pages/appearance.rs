@@ -517,7 +517,9 @@ impl SettingsView {
         let blur = p.chat_background_blur;
         let background = image.as_ref().and_then(|_| p.chat_background());
         let background_preview = self.background_preview.clone();
-        background_preview.update(cx, |preview, cx| preview.configure(background, true, None, cx));
+        background_preview.update(cx, |preview, cx| {
+            preview.configure(background, true, None, cx)
+        });
         let preview = div()
             .p_4()
             .child(

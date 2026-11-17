@@ -419,12 +419,21 @@ impl Workspace {
             | take(&mut self.last_actions, &from.last_actions)
             | take(&mut self.project_rail_pinned, &from.project_rail_pinned)
             | take(&mut self.project_rail_groups, &from.project_rail_groups)
-            | take(&mut self.project_rail_assignments, &from.project_rail_assignments)
+            | take(
+                &mut self.project_rail_assignments,
+                &from.project_rail_assignments,
+            )
             | take(&mut self.classic_layout, &from.classic_layout)
             | take(&mut self.new_layout_boxy, &from.new_layout_boxy)
             | take(&mut self.session_filters, &from.session_filters)
-            | take(&mut self.new_layout_prompt_dismissed, &from.new_layout_prompt_dismissed)
-            | take(&mut self.github_star_prompt_dismissed, &from.github_star_prompt_dismissed)
+            | take(
+                &mut self.new_layout_prompt_dismissed,
+                &from.new_layout_prompt_dismissed,
+            )
+            | take(
+                &mut self.github_star_prompt_dismissed,
+                &from.github_star_prompt_dismissed,
+            )
     }
     /// Just the app-wide parts, for handing to another window.
     pub(crate) fn shared_part(&self) -> Workspace {

@@ -347,7 +347,8 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             subscriptions.push(cx.observe(&center, |_, _, cx| cx.notify()));
         }
-        let background_preview = cx.new(|_| crate::project_background::ProjectBackground::preview());
+        let background_preview =
+            cx.new(|_| crate::project_background::ProjectBackground::preview());
         subscriptions.push(cx.observe(&background_preview, |_, _, cx| cx.notify()));
         let recorder = cx.weak_entity();
         subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
