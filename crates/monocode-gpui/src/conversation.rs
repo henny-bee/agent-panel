@@ -125,6 +125,9 @@ struct OpenMenu {
 }
 use response_menu::ResponseMenu;
 pub(crate) struct SessionChanged;
+/// A Claude CLI moved its tab to another conversation; this is the entry that
+/// now lists the one it left.
+pub(crate) struct SessionLeft(pub(crate) Session);
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::review::ReviewTab);
@@ -1567,6 +1570,7 @@ impl Conversation {
 }
 
 impl EventEmitter<SessionChanged> for Conversation {}
+impl EventEmitter<SessionLeft> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}

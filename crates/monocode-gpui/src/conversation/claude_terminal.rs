@@ -10,7 +10,7 @@ use std::time::Duration;
 pub(super) struct State {
     terminal: Entity<Terminal>,
     _events: Subscription,
-    _named: Option<Task<()>>,
+    _follow: Task<()>,
 }
 
 impl Conversation {
@@ -113,7 +113,9 @@ impl Conversation {
         self.settings.account.apply(Kind::Claude, &mut account)?;
         let env = account
             .get_envs()
-            .filter_map(|(key, value)| Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned())))
+            .filter_map(|(key, value)| {
+                Some((key.to_str()?.to_owned(), value?.to_str()?.to_owned()))
+            })
             .collect();
         let session = match self.summary.provider_id.clone() {
             Some(session) => session,
@@ -130,9 +132,6 @@ impl Conversation {
         }
         // Claude saves a session with its first message; until then the id is
         // still free to start with.
-        // ponytail: the binding follows the id the CLI was started with. A
-        // `/clear` or `/resume` typed inside it moves the CLI to another session
-        // that this tab does not follow; track the CLI's session id if that bites.
         let flag = if provider::claude_transcript(&self.settings.account, &session).is_some() {
             "--resume"
         } else {
@@ -151,35 +150,138 @@ impl Conversation {
         let cwd = self.execution_cwd().to_owned();
         let terminal = cx.new(|cx| Terminal::program(cwd, program, cx));
         let events = cx.subscribe(&terminal, |_, _, _: &TerminalEvent, cx| cx.notify());
-        let named = (!self.summary.has_messages).then(|| {
-            let account = self.settings.account.clone();
-            cx.spawn(async move |this, cx| {
-                // ponytail: polls the transcript every few seconds until the
-                // first message; a file watcher if many idle tabs make it show.
-                loop {
-                    cx.background_executor().timer(Duration::from_secs(3)).await;
-                    let (account, session) = (account.clone(), session.clone());
-                    let prompt = cx
-                        .background_executor()
-                        .spawn(async move { provider::claude_first_prompt(&account, &session) })
-                        .await;
-                    let named = this.update(cx, |this, cx| {
-                        prompt.is_some_and(|prompt| {
-                            this.claude_terminal_named(&prompt, cx);
-                            true
-                        })
-                    });
-                    if !matches!(named, Ok(false)) {
-                        break;
+        let pid = terminal.read(cx).pid();
+        let account = self.settings.account.clone();
+        let mut named = self.summary.has_messages;
+        let follow = cx.spawn(async move |this, cx| {
+            let mut session = session;
+            // ponytail: polls every few seconds; a file watcher if many idle
+            // tabs make it show.
+            loop {
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+                let (account, bound) = (account.clone(), session.clone());
+                let (live, prompt) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        // A `/clear` or `/resume` typed in the CLI moves it to
+                        // another session; the tab goes with it.
+                        let live = provider::claude_live_session(&account, pid).unwrap_or(bound);
+                        // Once named, the transcript is not read again.
+                        let prompt = (!named)
+                            .then(|| provider::claude_first_prompt(&account, &live))
+                            .flatten();
+                        (live, prompt)
+                    })
+                    .await;
+                let followed = this.update(cx, |this, cx| {
+                    this.claude_terminal_bound(&live, cx);
+                    if let Some(prompt) = prompt {
+                        this.claude_terminal_named(&prompt, cx);
                     }
+                    this.summary.has_messages
+                });
+                match followed {
+                    Ok(has_messages) => named = has_messages,
+                    Err(_) => break,
                 }
-            })
+                session = live;
+            }
         });
         Ok(State {
             terminal,
             _events: events,
-            _named: named,
+            _follow: follow,
         })
+    }
+
+    /// Rebinds the tab to the session its running CLI moved to, so a restart
+    /// resumes that conversation. One it leaves with messages keeps an entry.
+    fn claude_terminal_bound(&mut self, session: &str, cx: &mut Context<Self>) {
+        let running = self
+            .claude_terminal
+            .as_ref()
+            .is_some_and(|state| !state.terminal.read(cx).exited);
+        if !running || self.summary.provider_id.as_deref() == Some(session) {
+            return;
+        }
+        let moved = (|| {
+            let left = match self.summary.has_messages {
+                true => Some(self.claude_terminal_left(session)?),
+                false => None,
+            };
+            locked(&self.store)?.provider_id(self.summary.id, session)?;
+            Ok::<_, String>(left)
+        })();
+        match moved {
+            Ok(left) => {
+                self.summary.provider_id = Some(session.to_owned());
+                if let Some(left) = left {
+                    cx.emit(SessionLeft(left));
+                }
+                cx.emit(SessionChanged);
+                cx.notify();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    /// Gives the conversation this tab is leaving an entry of its own and
+    /// returns it. An idle CLI entry that already lists `session` trades places
+    /// with the tab, so nothing is listed twice; otherwise a new entry is made
+    /// and the tab starts over, to be named from its next first message.
+    fn claude_terminal_left(&mut self, session: &str) -> Result<Session, String> {
+        let mut store = locked(&self.store)?;
+        let id = self.summary.id;
+        // Only CLI entries trade: they hold one row, a chat entry its transcript.
+        let listed = store.sessions()?.into_iter().find(|other| {
+            other.id != id
+                && !other.archived
+                && other.has_messages
+                && other.provider_id.as_deref() == Some(session)
+                && store
+                    .agent_settings(other.id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|settings| settings.terminal)
+        });
+        let mut left = match listed {
+            Some(listed) => listed,
+            None => {
+                let created = store.create(&self.summary.provider, &self.summary.cwd)?;
+                let mut settings = self.settings.clone();
+                settings.model = self.model.clone();
+                store.save_agent_settings(created.id, &settings)?;
+                created
+            }
+        };
+        let (mine, theirs) = (store.load(id)?.rows, store.load(left.id)?.rows);
+        store.title(left.id, &self.summary.title)?;
+        store.write_rows(left.id, 0, &mine)?;
+        if let Some(leaving) = &self.summary.provider_id {
+            store.provider_id(left.id, leaving)?;
+        }
+        store.title(id, &left.title)?;
+        store.write_rows(id, 0, &theirs)?;
+        drop(store);
+        self.cancel_title_generation();
+        let (title, has_messages) = (left.title.clone(), left.has_messages);
+        left.title = std::mem::replace(&mut self.summary.title, title);
+        left.has_messages = std::mem::replace(&mut self.summary.has_messages, has_messages);
+        left.provider_id = self.summary.provider_id.clone();
+        Ok(left)
+    }
+
+    /// This entry traded places with a tab whose CLI moved onto its
+    /// conversation: it now lists the one that tab left.
+    pub(crate) fn claude_terminal_traded(&mut self, summary: Session, cx: &mut Context<Self>) {
+        self.cancel_title_generation();
+        // A CLI of its own would still be on the conversation the tab took.
+        self.claude_terminal = None;
+        self.summary.title = summary.title;
+        self.summary.provider_id = summary.provider_id;
+        self.summary.has_messages = summary.has_messages;
+        cx.emit(SessionChanged);
+        cx.notify();
     }
 
     /// The CLI has its first message: title the session and save one row, which
@@ -192,8 +294,8 @@ impl Conversation {
         let mut transcript = monocode_core::transcript::Transcript::default();
         transcript.begin("user");
         transcript.append(prompt);
-        if let Err(error) =
-            locked(&self.store).and_then(|mut store| store.write_rows(self.summary.id, 0, &transcript.rows))
+        if let Err(error) = locked(&self.store)
+            .and_then(|mut store| store.write_rows(self.summary.id, 0, &transcript.rows))
         {
             self.status = error;
         }

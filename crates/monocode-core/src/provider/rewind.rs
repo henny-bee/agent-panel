@@ -110,6 +110,28 @@ pub fn claude_transcript(account: &crate::accounts::Profile, session: &str) -> O
         .find(|path| path.is_file())
 }
 
+/// The session a running Claude CLI is on now. `/clear` and `/resume` typed
+/// inside it move it away from the id it was started with.
+// shortcut: reads Claude Code's own undocumented `sessions/<pid>.json`; if a
+// release drops that file this returns None and the caller keeps the id it has.
+pub fn claude_live_session(account: &crate::accounts::Profile, pid: u32) -> Option<String> {
+    let record = account
+        .home(Kind::Claude)
+        .ok()?
+        .join("sessions")
+        .join(format!("{pid}.json"));
+    let record: Value = serde_json::from_str(&std::fs::read_to_string(record).ok()?).ok()?;
+    record["sessionId"]
+        .as_str()
+        // The id becomes a CLI argument: accept only what a session id looks like.
+        .filter(|id| {
+            record["pid"] == pid
+                && id.len() == 36
+                && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        })
+        .map(str::to_owned)
+}
+
 /// The first message the user sent in a Claude session, to name it. Slash
 /// commands and their output are stored as tagged text and are skipped.
 pub fn claude_first_prompt(account: &crate::accounts::Profile, session: &str) -> Option<String> {
@@ -133,7 +155,10 @@ fn claude_boundary(transcript: &str, expected: &str) -> Result<(String, String),
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(id) = entry["uuid"].as_str().filter(|_| entry["isSidechain"] != true) else {
+        let Some(id) = entry["uuid"]
+            .as_str()
+            .filter(|_| entry["isSidechain"] != true)
+        else {
             continue;
         };
         cursor = Some(id.to_owned());
@@ -483,6 +508,37 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn claude_live_session_follows_the_record_the_cli_keeps_for_its_process() {
+        let root = tempfile::tempdir().unwrap();
+        let account = crate::accounts::Profile {
+            id: "work".into(),
+            root: Some(root.path().to_owned()),
+        };
+        let sessions = account.home(Kind::Claude).unwrap().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let id = "9b5b21da-dd32-4809-b5c4-fef6dd3aac13";
+        assert_eq!(claude_live_session(&account, 7), None);
+        std::fs::write(
+            sessions.join("7.json"),
+            json!({"pid":7,"sessionId":id}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(claude_live_session(&account, 7).as_deref(), Some(id));
+        // Another process's record, or something that is not a session id.
+        std::fs::write(
+            sessions.join("8.json"),
+            json!({"pid":7,"sessionId":id}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(claude_live_session(&account, 8), None);
+        std::fs::write(
+            sessions.join("7.json"),
+            json!({"pid":7,"sessionId":"--fork"}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(claude_live_session(&account, 7), None);
+    }
     fn claude_line(id: &str, parent: Option<&str>, kind: &str, content: Value) -> String {
         json!({"uuid":id,"parentUuid":parent,"type":kind,"isSidechain":false,"message":{"content":content}})
             .to_string()
@@ -509,7 +565,11 @@ mod tests {
         // The local message must be the one Claude stored last.
         assert!(claude_boundary(&transcript, "First").is_err());
         let first = claude_line("p1", None, "user", json!("First"));
-        assert!(claude_boundary(&first, "First").unwrap_err().contains("first message"));
+        assert!(
+            claude_boundary(&first, "First")
+                .unwrap_err()
+                .contains("first message")
+        );
         assert!(claude_boundary("", "First").is_err());
     }
     #[test]

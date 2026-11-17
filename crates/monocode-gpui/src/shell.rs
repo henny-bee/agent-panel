@@ -1436,6 +1436,22 @@ impl Shell {
                 this.invalidate_chrome(cx);
                 cx.notify();
             }));
+        self.observations.push(cx.subscribe(
+            &view,
+            |this, _, left: &crate::conversation::SessionLeft, cx| {
+                let left = left.0.clone();
+                match this.sessions.get(&left.id).cloned() {
+                    // An entry that traded places with the tab.
+                    Some(view) => {
+                        this.session_summaries.insert(left.id, left.clone());
+                        view.update(cx, |view, cx| view.claude_terminal_traded(left, cx));
+                    }
+                    None => this.add(left, cx),
+                }
+                this.invalidate_chrome(cx);
+                cx.notify();
+            },
+        ));
         self.observations
             .push(cx.subscribe(&view, |this, _, transfer: &Transfer, cx| {
                 this.transfer_response(transfer.clone(), cx)

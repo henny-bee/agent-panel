@@ -409,6 +409,11 @@ impl Terminal {
         }
         cx.notify();
     }
+    /// The process the terminal started: the shell or the given program. Zero
+    /// where it is not known.
+    pub(crate) fn pid(&self) -> u32 {
+        self.shell_pid
+    }
     fn set_foreground(&mut self, label: Option<String>, cx: &mut Context<Self>) {
         if label == self.foreground {
             return;

@@ -54,7 +54,8 @@ mod rewind;
 mod tasks;
 pub(crate) use rewind::claude_resume;
 pub use rewind::{
-    claude_first_prompt, claude_transcript, rewind_last_turn, supports_rewind, RewindError,
+    claude_first_prompt, claude_live_session, claude_transcript, rewind_last_turn, supports_rewind,
+    RewindError,
 };
 /// An id for a Claude session that has not been started yet.
 pub fn claude_session_id() -> String {
