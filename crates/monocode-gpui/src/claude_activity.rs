@@ -353,7 +353,7 @@ impl Log {
             return;
         }
         // In chunks: only the unfinished line is held between them.
-        let mut chunk = vec![0; 1 << 22];
+        let mut chunk = vec![0; ((len - self.offset) as usize).clamp(1, 1 << 22)];
         let mut buffer = std::mem::take(&mut self.partial);
         while let Ok(read @ 1..) = file.read(&mut chunk) {
             self.offset += read as u64;
@@ -367,6 +367,9 @@ impl Log {
             }
             buffer.drain(..start);
         }
+        // Every followed transcript keeps its log, so it keeps the unfinished
+        // line and not the megabytes of room it was read into.
+        buffer.shrink_to_fit();
         self.partial = buffer;
     }
 
@@ -818,6 +821,21 @@ mod tests {
         std::fs::write(&path, reply("c")).unwrap();
         log.pull(&path);
         assert_eq!(log.tokens(), 10);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_big_transcript_leaves_only_its_unfinished_line_in_memory() {
+        let dir = std::env::temp_dir().join(format!("claude-activity-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        // About 9 MB, so it is read in several chunks.
+        let line = "{\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n";
+        std::fs::write(&path, line.repeat(200_000) + "{\"half").unwrap();
+        let mut log = Log::default();
+        log.pull(&path);
+        assert_eq!(log.partial, b"{\"half");
+        assert!(log.partial.capacity() < 1024, "{}", log.partial.capacity());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
