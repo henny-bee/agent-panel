@@ -129,6 +129,9 @@ pub(crate) struct Terminal {
     selecting: bool,
     selection_pointer: Option<gpui::Point<gpui::Pixels>>,
     selection_scroll: Option<Task<()>>,
+    /// The cell last reported to a mouse-tracking program while the left
+    /// button is held, so its drag and release go to the program too.
+    reported: Option<(usize, usize)>,
     scroll_remainder: f32,
     url_regex: Option<RegexSearch>,
     /// The pointer over the grid, for underlining the link beneath it.
@@ -344,6 +347,7 @@ impl Terminal {
             selecting: false,
             selection_pointer: None,
             selection_scroll: None,
+            reported: None,
             scroll_remainder: 0.,
             url_regex: RegexSearch::new(URL_PATTERN).ok(),
             hover: None,
@@ -564,6 +568,16 @@ impl Terminal {
     }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        let mode = *self.term.lock().mode();
+        // A program tracking the mouse gets the click itself, as it gets
+        // the wheel; Shift keeps the terminal's own selection.
+        if mode.intersects(TermMode::MOUSE_MODE) && !event.modifiers.shift {
+            let (line, column) = self.viewport_cell(event.position);
+            let button = mouse_modifiers(&event.modifiers);
+            self.write(mouse_report(button, false, line, column, mode));
+            self.reported = Some((line, column));
+            return;
+        }
         self.pressed_link = (event.click_count == 1 && !event.modifiers.shift)
             .then(|| self.link_at(event.position))
             .flatten();
@@ -610,6 +624,10 @@ impl Terminal {
     /// A click that pressed and released on the same link, without
     /// dragging out a selection, opens it as the web build's xterm does.
     fn mouse_up(&mut self, event: &gpui::MouseUpEvent, cx: &mut Context<Self>) {
+        if self.reported.is_some() {
+            self.report_release(event.position, &event.modifiers);
+            return;
+        }
         self.stop_selection();
         let Some(link) = self.pressed_link.take() else {
             return;
@@ -622,6 +640,21 @@ impl Terminal {
             .is_some_and(|selection| !selection.is_empty());
         if !selected && self.link_at(event.position).as_ref() == Some(&link) {
             cx.open_url(&link.uri);
+        }
+    }
+    /// Ends a reported press, unless the program stopped tracking meanwhile.
+    fn report_release(&mut self, position: gpui::Point<gpui::Pixels>, modifiers: &gpui::Modifiers) {
+        self.reported = None;
+        let mode = *self.term.lock().mode();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            let (line, column) = self.viewport_cell(position);
+            self.write(mouse_report(
+                mouse_modifiers(modifiers),
+                true,
+                line,
+                column,
+                mode,
+            ));
         }
     }
     fn stop_selection(&mut self) {
@@ -672,6 +705,23 @@ impl Terminal {
         true
     }
     fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // shortcut: only drags are reported, not hover with no button held;
+        // add it if a program's hover effects (mode 1003) are missed.
+        if let Some(last) = self.reported {
+            if event.pressed_button != Some(MouseButton::Left) {
+                // The release happened outside the window.
+                self.report_release(event.position, &event.modifiers);
+                return;
+            }
+            let mode = *self.term.lock().mode();
+            let cell = self.viewport_cell(event.position);
+            if cell != last && mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) {
+                let button = 32 + mouse_modifiers(&event.modifiers);
+                self.write(mouse_report(button, false, cell.0, cell.1, mode));
+                self.reported = Some(cell);
+            }
+            return;
+        }
         if !self.selecting {
             return;
         }
@@ -702,7 +752,8 @@ impl Terminal {
         // A program tracking the mouse gets the wheel itself.
         if mode.intersects(TermMode::MOUSE_MODE) {
             let (line, column) = self.viewport_cell(event.position);
-            let report = wheel_report(lines > 0, line, column, mode);
+            let button = if lines > 0 { 64 } else { 65 };
+            let report = mouse_report(button, false, line, column, mode);
             self.write(report.repeat(lines.unsigned_abs() as usize));
         // A full-screen program scrolls itself; the shell scrolls history.
         } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
@@ -1482,13 +1533,21 @@ fn is_shell_name(name: &str) -> bool {
     )
 }
 
-/// One wheel notch as a mouse report, SGR when asked for, else the legacy
-/// X10 encoding (which cannot address past column or line 223).
-fn wheel_report(up: bool, line: usize, column: usize, mode: TermMode) -> Vec<u8> {
-    let button = if up { 64 } else { 65 };
+/// The xterm button-code bits for the modifiers held during a mouse report.
+fn mouse_modifiers(modifiers: &gpui::Modifiers) -> u8 {
+    u8::from(modifiers.alt) * 8 + u8::from(modifiers.control) * 16
+}
+
+/// One mouse report for an xterm button code (0 left, +32 while dragging,
+/// 64/65 a wheel notch), SGR when asked for, else the legacy X10 encoding
+/// (which cannot address past column or line 223).
+fn mouse_report(button: u8, release: bool, line: usize, column: usize, mode: TermMode) -> Vec<u8> {
     if mode.contains(TermMode::SGR_MOUSE) {
-        format!("\x1b[<{button};{};{}M", column + 1, line + 1).into_bytes()
+        let end = if release { 'm' } else { 'M' };
+        format!("\x1b[<{button};{};{}{end}", column + 1, line + 1).into_bytes()
     } else {
+        // X10 has no release per button: every release is button 3.
+        let button = if release { button | 3 } else { button };
         let cell = |n: usize| (n.min(222) + 33) as u8;
         vec![0x1b, b'[', b'M', button + 32, cell(column), cell(line)]
     }
@@ -1501,13 +1560,26 @@ mod tests {
     use gpui::{AppContext, Modifiers};
 
     #[test]
-    fn wheel_reports_match_the_requested_encoding() {
+    fn mouse_reports_match_the_requested_encoding() {
         let sgr = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
-        assert_eq!(wheel_report(true, 4, 9, sgr), b"\x1b[<64;10;5M");
-        assert_eq!(wheel_report(false, 0, 0, sgr), b"\x1b[<65;1;1M");
+        let x10 = TermMode::MOUSE_REPORT_CLICK;
+        assert_eq!(mouse_report(64, false, 4, 9, sgr), b"\x1b[<64;10;5M");
+        assert_eq!(mouse_report(65, false, 0, 0, sgr), b"\x1b[<65;1;1M");
         assert_eq!(
-            wheel_report(true, 4, 9, TermMode::MOUSE_REPORT_CLICK),
+            mouse_report(64, false, 4, 9, x10),
             [0x1b, b'[', b'M', 96, 42, 37]
+        );
+        // A left click, its release and a drag.
+        assert_eq!(mouse_report(0, false, 4, 9, sgr), b"\x1b[<0;10;5M");
+        assert_eq!(mouse_report(0, true, 4, 9, sgr), b"\x1b[<0;10;5m");
+        assert_eq!(mouse_report(32, false, 4, 9, sgr), b"\x1b[<32;10;5M");
+        assert_eq!(
+            mouse_report(0, false, 4, 9, x10),
+            [0x1b, b'[', b'M', 32, 42, 37]
+        );
+        assert_eq!(
+            mouse_report(0, true, 4, 9, x10),
+            [0x1b, b'[', b'M', 35, 42, 37]
         );
     }
 
