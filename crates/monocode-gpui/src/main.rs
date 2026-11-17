@@ -466,6 +466,24 @@ fn main() {
                     // Linux desktops match this to the .desktop file's
                     // StartupWMClass to show the app icon.
                     app_id: Some("dev.usemono.gpui".into()),
+                    // X11 taskbars show the window's own icon, not that file's.
+                    icon: cfg!(target_os = "linux")
+                        .then(|| {
+                            image::load_from_memory_with_format(
+                                include_bytes!("../assets/monocode.png"),
+                                image::ImageFormat::Png,
+                            )
+                            .ok()
+                        })
+                        .flatten()
+                        .map(|icon| {
+                            std::sync::Arc::new(image::imageops::resize(
+                                &icon.to_rgba8(),
+                                128,
+                                128,
+                                image::imageops::FilterType::Nearest,
+                            ))
+                        }),
                     window_background: theme::window_backdrop(true),
                     // GPUI owns the custom chrome. AppKit must not reinterpret
                     // its controls as native titlebar double-click/drag gestures.
