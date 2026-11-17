@@ -138,9 +138,14 @@ impl Conversation {
         } else {
             "--session-id"
         };
+        let mut args = vec![flag.into(), session.clone()];
+        // The model picked for the session; without one the CLI uses its own.
+        if let Some(model) = &self.model {
+            args.extend(["--model".into(), model.clone()]);
+        }
         let program = Program {
             path: binary.to_string_lossy().into_owned(),
-            args: vec![flag.into(), session.clone()],
+            args,
             env,
         };
         let cwd = self.execution_cwd().to_owned();

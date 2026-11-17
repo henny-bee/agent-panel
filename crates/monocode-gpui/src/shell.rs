@@ -387,6 +387,8 @@ pub(crate) enum MenuTarget {
     Actions,
     /// The title strip's new-tab button, when terminals open in the title bar.
     NewTab,
+    /// The chevron beside it: a new session on a model picked from the list.
+    NewTabModel,
 }
 pub(crate) struct ShellMenu {
     pub(crate) target: MenuTarget,
@@ -408,7 +410,9 @@ const SELECTED_TAB_MIN_WIDTH: f32 = 112.;
 /// Narrower tabs drop their close button.
 const TAB_CLOSE_MIN_WIDTH: f32 = 72.;
 /// The new-tab button and its leading margin.
-const STRIP_NEW_TAB: f32 = TAB_PLATE_HEIGHT + 2.;
+const STRIP_NEW_TAB: f32 = TAB_PLATE_HEIGHT + 2. + NEW_TAB_MODEL_WIDTH + 2.;
+/// The model chevron after the new-tab button, one strip gap further on.
+const NEW_TAB_MODEL_WIDTH: f32 = 18.;
 const CORNER_TABS_LEAD: f32 = 7.;
 const CORNER_CONTROL_GAP: f32 = 4.;
 const CORNER_BUTTONS_WIDTH: f32 = 48. + 2. * CORNER_CONTROL_GAP;
@@ -5436,6 +5440,44 @@ impl Shell {
                 200.,
                 MenuStyle::Explorer,
             ),
+            // The model picker a conversation shows, starting a session instead.
+            MenuTarget::NewTabModel => {
+                let choice = self.default_choice();
+                let project = self.workspace.project.clone();
+                let profile = crate::accounts::get(cx)
+                    .map(|accounts| accounts.read(cx).selected(choice.kind, &project))
+                    .unwrap_or_default();
+                let hidden = self.workspace.preferences.hidden_for(&project);
+                let list = cx.new(|cx| {
+                    crate::pickers::ModelList::new_for(
+                        choice.kind,
+                        choice.model,
+                        &project,
+                        profile,
+                        cx,
+                    )
+                    .hide_providers(hidden)
+                    .allow_provider_switch(true)
+                });
+                events.push(cx.subscribe(
+                    &list,
+                    |this, _, picked: &crate::pickers::ModelPicked, cx| {
+                        this.close_menu(cx);
+                        let choice = new_chat_choice::NewChatChoice {
+                            kind: picked.0,
+                            model: picked.1.clone(),
+                        };
+                        this.create_session(choice, false, cx);
+                    },
+                ));
+                let focus = list.read(cx).search_focus(cx);
+                (
+                    "New session model".into(),
+                    vec![MenuItem::Custom(list.into(), focus)],
+                    310.,
+                    MenuStyle::Explorer,
+                )
+            }
             MenuTarget::Tab(_)
             | MenuTarget::MonoTab(_)
             | MenuTarget::SearchTab
@@ -5856,6 +5898,8 @@ impl Shell {
                 "terminal" => self.new_title_terminal(window, cx),
                 _ => self.new_chat(cx),
             },
+            // Its list reports the pick itself.
+            MenuTarget::NewTabModel => {}
             MenuTarget::TerminalDock => {
                 let side = match action {
                     "top" => DockSide::Top,
@@ -8434,6 +8478,40 @@ impl Shell {
                                 } else {
                                     let anchor = Anchor::Slot(this.new_tab_anchor.clone());
                                     this.open_menu(MenuTarget::NewTab, anchor, window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("new-tab-model")
+                            .debug_selector(|| "new-tab-model".into())
+                            .group("new-tab-model")
+                            .role(Role::Button)
+                            .aria_label("New session with a chosen model")
+                            .cursor_pointer()
+                            .w(px(NEW_TAB_MODEL_WIDTH))
+                            .h(px(TAB_PLATE_HEIGHT))
+                            .flex_shrink_0()
+                            .rounded_md()
+                            .bg(content(0.04))
+                            .opacity(0.65)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .hover(|s| s.opacity(1.).bg(content(0.07)))
+                            .when(self.menu_open(&MenuTarget::NewTabModel), |d| {
+                                d.opacity(1.).bg(content(0.07))
+                            })
+                            .child(
+                                icon("chevron-down", 12.)
+                                    .group_hover("new-tab-model", |s| s.text_color(content(1.))),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.menu_open(&MenuTarget::NewTabModel) {
+                                    this.close_menu(cx);
+                                } else {
+                                    let anchor = Anchor::Slot(this.new_tab_anchor.clone());
+                                    this.open_menu(MenuTarget::NewTabModel, anchor, window, cx);
                                 }
                             })),
                     )
