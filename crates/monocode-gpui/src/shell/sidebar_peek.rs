@@ -303,7 +303,8 @@ impl Shell {
                             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                             let quad = {
                                 let _ = blur;
-                                gpui::fill(bounds, shell_fill())
+                                // No renderer blur here: stay opaque over the content.
+                                gpui::fill(bounds, background_base())
                             };
                             window.paint_quad(quad.corner_radii(px(10.)));
                         },

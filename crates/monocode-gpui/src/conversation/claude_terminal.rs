@@ -75,7 +75,8 @@ impl Conversation {
             div()
                 .relative()
                 .size_full()
-                .bg(gpui::rgb(CHAT))
+                // No fill of its own: the pane's card, glass and chat
+                // background show behind the CLI as behind any session.
                 .child(terminal.cached(StyleRefinement::default().size_full()))
                 .when(exited, |d| {
                     d.child(

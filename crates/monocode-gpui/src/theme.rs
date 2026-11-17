@@ -200,10 +200,15 @@ impl Tokens {
     }
 }
 
-/// Platforms whose compositor blurs the desktop behind the window: macOS
-/// vibrancy and Windows Acrylic. Linux blur is compositor-dependent, so it
-/// stays opaque rather than exposing the raw desktop.
-pub(crate) const GLASS_PLATFORM: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+/// Platforms whose compositor can show the desktop behind the window: macOS
+/// vibrancy, Windows Acrylic, and a Linux compositor. Whether Linux blurs
+/// what shows through is up to that compositor (picom, KWin); without blur
+/// the Translucency settings can turn it back to opaque.
+pub(crate) const GLASS_PLATFORM: bool = cfg!(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux"
+));
 pub(crate) fn window_glass(p: &crate::settings::Preferences, system_light: bool) -> bool {
     GLASS_PLATFORM && p.theme != "light" && !(p.theme == "system" && system_light)
 }

@@ -52,17 +52,15 @@ fn card_corner_mask(begin: bool) -> impl IntoElement {
                 #[cfg(target_os = "macos")]
                 let outside = inset_chrome_wash();
                 // Without the mask an opaque fill covers whatever the card
-                // painted past its curve. Over Windows' glass the root's
-                // translucent fill is already there, and a second one darkens
-                // the corners.
-                #[cfg(target_os = "windows")]
+                // painted past its curve. Over Windows or Linux glass the
+                // root's translucent fill is already there, and a second one
+                // darkens the corners.
+                #[cfg(not(target_os = "macos"))]
                 let outside = if shell_fill().a < 1. {
                     inset_chrome_wash()
                 } else {
                     shell_fill().blend(inset_chrome_wash())
                 };
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                let outside = shell_fill().blend(inset_chrome_wash());
                 let vertices = [
                     (
                         bounds.origin,
