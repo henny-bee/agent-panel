@@ -20,7 +20,6 @@ const KEEP_RECENT: Duration = Duration::from_secs(2);
 
 struct Caches {
     thumbnails: Entity<BoundedImages>,
-    previews: Entity<BoundedImages>,
     images: Entity<BoundedImages>,
 }
 thread_local! { static CACHES: RefCell<Option<Caches>> = const { RefCell::new(None) }; }
@@ -29,8 +28,6 @@ pub(crate) fn init(cx: &mut App) {
     let caches = Caches {
         // Project logos and other icon-sized artwork, drawn at 24pt or less.
         thumbnails: BoundedImages::new(128, 8 << 20, cx),
-        // Settings previews a few hundred points across.
-        previews: BoundedImages::new(1024, 24 << 20, cx),
         // Note and inbox images. Wider than any pane, so layouts keep their size.
         images: BoundedImages::new(2560, 96 << 20, cx),
     };
@@ -48,10 +45,6 @@ fn with_cache(source: impl Into<ImageSource>, pick: fn(&Caches) -> &Entity<Bound
 /// `img` for icon-sized artwork; the decode is shrunk to 128px.
 pub(crate) fn thumbnail(source: impl Into<ImageSource>) -> Img {
     with_cache(source, |c| &c.thumbnails)
-}
-/// `img` for previews a few hundred points across; the decode is shrunk to 1024px.
-pub(crate) fn preview(source: impl Into<ImageSource>) -> Img {
-    with_cache(source, |c| &c.previews)
 }
 /// `img` for content images, kept within the shared budget.
 pub(crate) fn image(source: impl Into<ImageSource>) -> Img {

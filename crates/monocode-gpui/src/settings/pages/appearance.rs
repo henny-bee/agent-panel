@@ -514,6 +514,10 @@ impl SettingsView {
             .filter(|path| std::path::Path::new(path).is_file());
         let empty = p.chat_background_empty;
         let session = p.chat_background_session;
+        let blur = p.chat_background_blur;
+        let background = image.as_ref().and_then(|_| p.chat_background());
+        let background_preview = self.background_preview.clone();
+        background_preview.update(cx, |preview, cx| preview.configure(background, true, None, cx));
         let preview = div()
             .p_4()
             .child(
@@ -523,16 +527,11 @@ impl SettingsView {
                     .border_1()
                     .border_color(content(0.1))
                     .map(|d| match &image {
-                        Some(path) => d.child(
+                        Some(_) => d.child(
                             div()
                                 .relative()
                                 .h(px(144.))
-                                .child(
-                                    crate::image_memory::preview(std::path::PathBuf::from(path))
-                                        .size_full()
-                                        .object_fit(gpui::ObjectFit::Cover)
-                                        .opacity(empty as f32 / 100.),
-                                )
+                                .child(background_preview)
                                 .child(
                                     div()
                                         .absolute()
@@ -606,6 +605,13 @@ impl SettingsView {
                     cx,
                     |this, v, cx| this.update(cx, |p| p.chat_background_effect = v.into()),
                 )],
+            ));
+            rows.push(self.row(
+                None,
+                false,
+                "Blur",
+                Some("Frosted glass: how soft the image looks behind your chat.".into()),
+                vec![self.slider(SliderKind::BackgroundBlur, format!("{blur}%"), false, cx)],
             ));
             rows.push(self.row(
                 None,

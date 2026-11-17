@@ -495,14 +495,52 @@ impl Render for AppearanceControls {
     }
 }
 
+/// The background dialog's sliders. Each value is a fraction of its range.
+#[derive(Clone, Copy, PartialEq)]
+enum Slide {
+    Empty,
+    Session,
+    Blur,
+}
+impl Slide {
+    /// Label, element id, row selector, lowest value and span.
+    fn spec(self) -> (&'static str, &'static str, &'static str, f32, f32) {
+        match self {
+            Slide::Empty => (
+                "Empty chat visibility",
+                "empty-background-opacity",
+                "background-empty-row",
+                0.05,
+                0.60,
+            ),
+            Slide::Session => (
+                "Session visibility",
+                "session-background-opacity",
+                "background-session-row",
+                0.05,
+                0.60,
+            ),
+            // Frosted glass, from sharp to fully blurred.
+            Slide::Blur => ("Blur", "background-blur", "background-blur-row", 0., 1.),
+        }
+    }
+    fn get(self, background: &Background) -> f32 {
+        match self {
+            Slide::Empty => background.empty_opacity,
+            Slide::Session => background.session_opacity,
+            Slide::Blur => background.blur as f32 / 100.,
+        }
+    }
+}
+
 pub(crate) struct BackgroundDialog {
     project: String,
     appearance: ProjectAppearance,
     background: Background,
     preview: Entity<ProjectBackground>,
     focus: FocusHandle,
-    sliders: [FocusHandle; 2],
-    dragging: Option<bool>,
+    sliders: [FocusHandle; 3],
+    dragging: Option<Slide>,
     busy: bool,
     error: Option<String>,
     bounds: AnchorSlot,
@@ -543,7 +581,7 @@ impl BackgroundDialog {
             effect_focus: cx.focus_handle(),
             effect_trigger_focus: cx.focus_handle(),
             focus: cx.focus_handle(),
-            sliders: [cx.focus_handle(), cx.focus_handle()],
+            sliders: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
             dragging: None,
             busy: false,
             error: None,
@@ -604,12 +642,12 @@ impl BackgroundDialog {
         })
         .detach();
     }
-    fn set_opacity(&mut self, empty: bool, value: f32, cx: &mut Context<Self>) {
+    fn set_slide(&mut self, slide: Slide, value: f32, cx: &mut Context<Self>) {
         let value = (value * 100.).round() / 100.;
-        if empty {
-            self.background.empty_opacity = value;
-        } else {
-            self.background.session_opacity = value;
+        match slide {
+            Slide::Empty => self.background.empty_opacity = value,
+            Slide::Session => self.background.session_opacity = value,
+            Slide::Blur => self.background.blur = (value.clamp(0., 1.) * 100.).round() as u32,
         }
         self.save(cx);
     }
@@ -731,30 +769,20 @@ impl BackgroundDialog {
             .into_any_element(),
         )
     }
-    fn slider(&self, empty: bool, cx: &mut Context<Self>) -> AnyElement {
-        let value = if empty {
-            self.background.empty_opacity
-        } else {
-            self.background.session_opacity
-        };
-        let fraction = (value - 0.05) / 0.60;
+    fn slider(&self, slide: Slide, cx: &mut Context<Self>) -> AnyElement {
+        let (label, id, row, low, span) = slide.spec();
+        let value = slide.get(&self.background);
+        let fraction = (value - low) / span;
         let bounds = AnchorSlot::default();
         let movement = bounds.clone();
         let probe = bounds.clone();
-        let focus = self.sliders[usize::from(!empty)].clone();
-        let label = if empty {
-            "Empty chat visibility"
-        } else {
-            "Session visibility"
+        let focus = self.sliders[slide as usize].clone();
+        // The pointer's place along the track, as a value in the slider's range.
+        let at = move |x: gpui::Pixels, bounds: gpui::Bounds<gpui::Pixels>| {
+            low + ((x - bounds.left()).as_f32() - 6.) / (bounds.size.width.as_f32() - 12.) * span
         };
         div()
-            .debug_selector(move || {
-                if empty {
-                    "background-empty-row".into()
-                } else {
-                    "background-session-row".into()
-                }
-            })
+            .debug_selector(move || row.into())
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -779,18 +807,8 @@ impl BackgroundDialog {
                     .gap_3()
                     .child(
                         div()
-                            .id(if empty {
-                                "empty-background-opacity"
-                            } else {
-                                "session-background-opacity"
-                            })
-                            .debug_selector(move || {
-                                if empty {
-                                    "empty-background-opacity".into()
-                                } else {
-                                    "session-background-opacity".into()
-                                }
-                            })
+                            .id(id)
+                            .debug_selector(move || id.into())
                             .role(Role::Slider)
                             .aria_label(label)
                             .aria_value(format!("{}%", (value * 100.).round()))
@@ -816,53 +834,35 @@ impl BackgroundDialog {
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    window.focus(&this.sliders[usize::from(!empty)], cx);
-                                    this.dragging = Some(empty);
+                                    window.focus(&this.sliders[slide as usize], cx);
+                                    this.dragging = Some(slide);
                                     if let Some(bounds) = bounds.get() {
-                                        this.set_opacity(
-                                            empty,
-                                            0.05 + ((event.position.x - bounds.left()).as_f32()
-                                                - 6.)
-                                                / (bounds.size.width.as_f32() - 12.)
-                                                * 0.60,
-                                            cx,
-                                        );
+                                        this.set_slide(slide, at(event.position.x, bounds), cx);
                                     }
                                     cx.stop_propagation();
                                 }),
                             )
                             .on_mouse_move(cx.listener(
                                 move |this, event: &MouseMoveEvent, _, cx| {
-                                    if this.dragging == Some(empty)
+                                    if this.dragging == Some(slide)
                                         && event.pressed_button == Some(MouseButton::Left)
                                         && let Some(bounds) = movement.get()
                                     {
-                                        this.set_opacity(
-                                            empty,
-                                            0.05 + ((event.position.x - bounds.left()).as_f32()
-                                                - 6.)
-                                                / (bounds.size.width.as_f32() - 12.)
-                                                * 0.60,
-                                            cx,
-                                        );
+                                        this.set_slide(slide, at(event.position.x, bounds), cx);
                                     }
                                 },
                             ))
                             .on_key_down(cx.listener(
                                 move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                    let old = if empty {
-                                        this.background.empty_opacity
-                                    } else {
-                                        this.background.session_opacity
-                                    };
+                                    let old = slide.get(&this.background);
                                     let next = match event.keystroke.key.as_str() {
                                         "left" | "down" => old - 0.01,
                                         "right" | "up" => old + 0.01,
-                                        "home" => 0.05,
-                                        "end" => 0.65,
+                                        "home" => low,
+                                        "end" => low + span,
                                         _ => return,
                                     };
-                                    this.set_opacity(empty, next, cx);
+                                    this.set_slide(slide, next, cx);
                                     cx.stop_propagation();
                                 },
                             )),
@@ -1070,9 +1070,9 @@ impl Render for BackgroundDialog {
                     .child(div().mt(px(6.)).text_size(px(11.)).line_height(px(17.875)).text_color(content(0.45))
                         .child(if has_image{"This image overrides the global background for this project."}else{"No background selected for this project."}))
                     .when_some(error,|d,error|d.child(div().mt(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(rgb(0xff6467)).child(error))))
-                .when(has_image,|d|d.child(self.effect_row(cx)))
+                .when(has_image,|d|d.child(self.effect_row(cx)).child(self.slider(Slide::Blur,cx)))
                 .child(self.scope_row(cx))
-                .child(self.slider(true,cx)).child(self.slider(false,cx))
+                .child(self.slider(Slide::Empty,cx)).child(self.slider(Slide::Session,cx))
                 .when(has_image,|d|d.child(button("remove-project-background","Remove background image").flex_shrink_0().text_color(rgb(0xff6467))
                     .on_click(cx.listener(|this,_,_,cx|{this.background=Background::default();this.effect_open=false;this.error=None;this.save(cx);}))))
             )

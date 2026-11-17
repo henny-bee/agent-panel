@@ -144,6 +144,7 @@ pub(crate) enum SliderKind {
     SidebarOpacity,
     BackgroundEmpty,
     BackgroundSession,
+    BackgroundBlur,
 }
 impl SliderKind {
     fn id(self) -> &'static str {
@@ -154,6 +155,7 @@ impl SliderKind {
             SliderKind::SidebarOpacity => "sidebar-opacity",
             SliderKind::BackgroundEmpty => "background-empty",
             SliderKind::BackgroundSession => "background-session",
+            SliderKind::BackgroundBlur => "background-blur",
         }
     }
     fn label(self) -> &'static str {
@@ -164,6 +166,7 @@ impl SliderKind {
             SliderKind::SidebarOpacity => "Sidebar opacity",
             SliderKind::BackgroundEmpty => "Empty chat background visibility",
             SliderKind::BackgroundSession => "Session background visibility",
+            SliderKind::BackgroundBlur => "Chat background blur",
         }
     }
     fn range(self) -> (u32, u32) {
@@ -173,6 +176,7 @@ impl SliderKind {
             SliderKind::DarkLightness => (0, 30),
             SliderKind::SidebarOpacity => (15, 100),
             SliderKind::BackgroundEmpty | SliderKind::BackgroundSession => (5, 65),
+            SliderKind::BackgroundBlur => (0, 100),
         }
     }
     fn get(self, p: &Preferences) -> u32 {
@@ -183,6 +187,7 @@ impl SliderKind {
             SliderKind::SidebarOpacity => p.sidebar_opacity,
             SliderKind::BackgroundEmpty => p.chat_background_empty,
             SliderKind::BackgroundSession => p.chat_background_session,
+            SliderKind::BackgroundBlur => p.chat_background_blur,
         }
     }
     fn set(self, p: &mut Preferences, value: u32) {
@@ -193,6 +198,7 @@ impl SliderKind {
             SliderKind::SidebarOpacity => p.sidebar_opacity = value,
             SliderKind::BackgroundEmpty => p.chat_background_empty = value,
             SliderKind::BackgroundSession => p.chat_background_session = value,
+            SliderKind::BackgroundBlur => p.chat_background_blur = value,
         }
     }
 }
@@ -259,6 +265,8 @@ pub(crate) struct SettingsView {
     accent_custom_open: bool,
     accent_anchor: AnchorSlot,
     mobile: pages::MobileState,
+    /// Chat background preview, drawn with the chosen effect like the chat panes.
+    background_preview: Entity<crate::project_background::ProjectBackground>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -339,6 +347,8 @@ impl SettingsView {
         if let Some(center) = crate::accounts::get(cx) {
             subscriptions.push(cx.observe(&center, |_, _, cx| cx.notify()));
         }
+        let background_preview = cx.new(|_| crate::project_background::ProjectBackground::preview());
+        subscriptions.push(cx.observe(&background_preview, |_, _, cx| cx.notify()));
         let recorder = cx.weak_entity();
         subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
             let _ = recorder.update(cx, |this, cx| {
@@ -409,6 +419,7 @@ impl SettingsView {
             accent_custom_open: false,
             accent_anchor: AnchorSlot::default(),
             mobile: pages::MobileState::default(),
+            background_preview,
             _subscriptions: subscriptions,
         };
         this.watch_mobile(cx);

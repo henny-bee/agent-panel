@@ -52,6 +52,8 @@ pub(crate) struct Preferences {
     pub chat_background_scope: String,
     pub chat_background_empty: u32,
     pub chat_background_session: u32,
+    /// Frosted glass: how far the image is blurred, 0 (sharp) to 100.
+    pub chat_background_blur: u32,
     pub collapsed_project_rail: String,
     pub ui_scale: u32,
     pub show_excluded_files: bool,
@@ -149,6 +151,7 @@ impl Default for Preferences {
             chat_background_scope: "all".into(),
             chat_background_empty: 24,
             chat_background_session: 24,
+            chat_background_blur: 0,
             collapsed_project_rail: "compact".into(),
             ui_scale: 100,
             show_excluded_files: false,
@@ -252,6 +255,7 @@ impl Preferences {
         self.show_excluded_files = d.show_excluded_files;
         self.chat_background_empty = d.chat_background_empty;
         self.chat_background_session = d.chat_background_session;
+        self.chat_background_blur = d.chat_background_blur;
         self.chat_background_scope = d.chat_background_scope;
         self.diff_palette = d.diff_palette;
         self.chat_background_effect = d.chat_background_effect;
@@ -277,6 +281,29 @@ pub(crate) struct ModelChoice {
 
 impl gpui::Global for Preferences {}
 impl Preferences {
+    /// The global chat background, as chat panes and its Settings preview draw it.
+    pub(crate) fn chat_background(&self) -> Option<monocode_core::project_appearance::Background> {
+        use monocode_core::project_appearance::{Background, Effect, Scope};
+        self.chat_background.as_ref().map(|path| Background {
+            path: path.clone(),
+            effect: match self.chat_background_effect.as_str() {
+                "dither" => Effect::Dither,
+                "ascii" => Effect::Ascii,
+                "halftone" => Effect::Halftone,
+                "scanlines" => Effect::Scanlines,
+                "gradient-blur" => Effect::GradientBlur,
+                _ => Effect::None,
+            },
+            scope: if self.chat_background_scope == "empty" {
+                Scope::Empty
+            } else {
+                Scope::All
+            },
+            empty_opacity: self.chat_background_empty.clamp(5, 65) as f32 / 100.,
+            session_opacity: self.chat_background_session.clamp(5, 65) as f32 / 100.,
+            blur: self.chat_background_blur.min(100),
+        })
+    }
     /// The background model picked in Settings, if any.
     pub(crate) fn background_text_model(&self) -> Option<(Kind, Option<String>)> {
         let choice = self.background_model.as_ref()?;

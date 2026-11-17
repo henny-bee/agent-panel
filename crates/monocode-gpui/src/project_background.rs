@@ -23,6 +23,8 @@ const FADE: Duration = Duration::from_millis(240);
 struct Key {
     path: String,
     effect: Effect,
+    /// Frosted glass strength, 0 to 100.
+    blur: u32,
     #[cfg(not(target_os = "macos"))]
     empty: bool,
     #[cfg(not(target_os = "macos"))]
@@ -87,7 +89,10 @@ async fn prepare_texture(
     request: TextureRequest,
     screen: (u32, u32),
 ) -> Result<Arc<RenderImage>, String> {
-    let source = read_image(Path::new(&request.key.path))?;
+    let source = monocode_core::project_appearance::frost(
+        read_image(Path::new(&request.key.path))?,
+        request.key.blur,
+    );
     #[cfg(target_os = "macos")]
     let mut pixels = background_texture(source, request.key.effect);
     #[cfg(not(target_os = "macos"))]
@@ -124,6 +129,10 @@ pub(crate) struct ProjectBackground {
     clip: Option<AnchorSlot>,
     key: Option<Key>,
     image: Option<Arc<RenderImage>>,
+    /// The texture asked for and not ready yet. The drawn one stays until it
+    /// is, and nothing newer is asked for meanwhile: a slider passing through
+    /// values neither blanks the artwork nor leaves unfinished loads behind.
+    next: Option<Key>,
     pub(crate) error: Option<String>,
     loading: bool,
     /// Set when the shell switches here from a tab drawing no background; the
@@ -156,6 +165,7 @@ impl ProjectBackground {
         }
         if self.settings.as_ref().map(|s| &s.path) != settings.as_ref().map(|s| &s.path) {
             self.loading = false;
+            self.next = None;
             self.release(None, cx);
             self.error = None;
         }
@@ -204,25 +214,33 @@ impl ProjectBackground {
         if self._release.is_none() {
             self._release = Some(cx.on_release(|this, cx| this.release(None, cx)));
         }
-        if self.key.as_ref() != Some(&key) {
-            self.release(Some(window), cx);
-        }
-        self.key = Some(key.clone());
-        self.error = None;
+        // The pending load finishes before a newer one is asked for.
+        let asking = self.next.clone().unwrap_or_else(|| key.clone());
         // GPUI shares pending jobs and completed textures across views. A warm
         // hit returns in this render, with the same Image ID and decoded asset.
         // Closing the first tab cannot cancel a load another tab is waiting on.
-        match window.use_asset::<BackgroundTexture>(&TextureRequest { key }, cx) {
-            Some(Ok(prepared)) => {
+        let request = TextureRequest {
+            key: asking.clone(),
+        };
+        let Some(result) = window.use_asset::<BackgroundTexture>(&request, cx) else {
+            self.next = Some(asking);
+            self.loading = true;
+            return;
+        };
+        self.release(Some(window), cx);
+        self.next = None;
+        self.loading = false;
+        self.key = Some(asking.clone());
+        match result {
+            Ok(prepared) => {
                 self.image = Some(prepared);
-                self.loading = false;
+                self.error = None;
             }
-            Some(Err(error)) => {
-                self.image = None;
-                self.error = Some(error);
-                self.loading = false;
-            }
-            None => self.loading = true,
+            Err(error) => self.error = Some(error),
+        }
+        // The settings moved on while it loaded.
+        if asking != key {
+            self.prepare(key, window, cx);
         }
     }
     fn mask(&self, begin: bool, settings: &Background, opacity: f32) -> impl IntoElement {
@@ -250,9 +268,10 @@ impl ProjectBackground {
                         )),
                 );
                 #[cfg(not(target_os = "macos"))]
-                if !begin {
+                if !begin && haze {
                     // Other backends have an opaque chat surface. Reveal that
                     // surface with the same view-relative stops while it resizes.
+                    // Only Haze fades into it; other effects keep the full wallpaper.
                     use crate::theme::CHAT;
                     use monocode_core::project_appearance::background_fade;
                     let _ = (preview, &clip, opacity);
@@ -312,6 +331,7 @@ impl Render for ProjectBackground {
         let key = Key {
             path: settings.path.clone(),
             effect: settings.effect,
+            blur: settings.blur,
             #[cfg(not(target_os = "macos"))]
             empty: settings.effect != Effect::GradientBlur || self.empty,
             #[cfg(not(target_os = "macos"))]
@@ -503,6 +523,71 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_blur_change_keeps_the_drawn_artwork_until_the_frosted_texture_is_ready(
+        cx: &mut TestAppContext,
+    ) {
+        struct Surface(gpui::Entity<ProjectBackground>);
+        impl Render for Surface {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().relative().size_full().child(self.0.clone())
+            }
+        }
+        let settings = Background {
+            path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/monocode.png").into(),
+            ..Default::default()
+        };
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Surface(cx.new(|_| ProjectBackground {
+                        settings: Some(settings.clone()),
+                        empty: true,
+                        ..Default::default()
+                    }))
+                })
+            })
+            .unwrap()
+        });
+        let view = window.update(cx, |surface, _, _| surface.0.clone()).unwrap();
+        for _ in 0..2 {
+            cx.refresh().unwrap();
+            cx.run_until_parked();
+        }
+        let sharp = view.read_with(cx, |background, _| background.image.clone().unwrap());
+        // A slider passes through one strength on its way to another.
+        for blur in [40, 80] {
+            view.update(cx, |background, cx| {
+                let frosted = Background {
+                    blur,
+                    ..settings.clone()
+                };
+                background.configure(Some(frosted), true, None, cx)
+            });
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_next_frame(cx);
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+            view.read_with(cx, |background, _| {
+                assert!(background.loading);
+                assert!(
+                    Arc::ptr_eq(background.image.as_ref().unwrap(), &sharp),
+                    "the drawn artwork stays up while the frosted one is prepared"
+                );
+            });
+        }
+        for _ in 0..4 {
+            cx.refresh().unwrap();
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |background, _| {
+            assert!(!background.loading);
+            assert_eq!(background.key.as_ref().unwrap().blur, 80, "the latest strength wins");
+            assert!(!Arc::ptr_eq(background.image.as_ref().unwrap(), &sharp));
+        });
+    }
+
+    #[gpui::test]
     fn live_resize_and_opacity_reuse_the_texture_without_a_background_job(cx: &mut TestAppContext) {
         struct Surface(gpui::Entity<ProjectBackground>);
         impl Render for Surface {
@@ -527,6 +612,7 @@ mod tests {
                         key: Some(Key {
                             path: "prepared-artwork".into(),
                             effect: Effect::Dither,
+                            blur: 0,
                             #[cfg(not(target_os = "macos"))]
                             empty: true,
                             #[cfg(not(target_os = "macos"))]

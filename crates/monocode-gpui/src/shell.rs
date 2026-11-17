@@ -10181,6 +10181,7 @@ mod tests {
             .debug_bounds("project-settings-Change image")
             .unwrap();
         let effect = visual.debug_bounds("background-effect-row").unwrap();
+        let blur_row = visual.debug_bounds("background-blur-row").unwrap();
         let scope = visual.debug_bounds("background-scope-row").unwrap();
         let scope_control = visual.debug_bounds("background-scope-control").unwrap();
         let empty_row = visual.debug_bounds("background-empty-row").unwrap();
@@ -10198,7 +10199,8 @@ mod tests {
         assert_eq!(effect.size.height, px(57.5));
         assert_eq!(scope_control.size, gpui::size(px(176.), px(32.)));
         for (before, after) in [
-            (effect, scope),
+            (effect, blur_row),
+            (blur_row, scope),
             (scope, empty_row),
             (empty_row, session_row),
             (session_row, remove),
@@ -10215,7 +10217,7 @@ mod tests {
                             && q.bounds.size.width.0 == 172. * w.scale_factor()
                             && q.bounds.size.height.0 == 4. * w.scale_factor())
                         .count(),
-                    2
+                    3
                 );
             })
             .unwrap();
@@ -10239,6 +10241,11 @@ mod tests {
         visual.simulate_click(opacity.center(), Default::default());
         visual.simulate_keystrokes("right");
         visual.run_until_parked();
+        // Frosted glass: the middle of the track, then one step by keyboard.
+        let blur = visual.debug_bounds("background-blur").unwrap();
+        visual.simulate_click(blur.center(), Default::default());
+        visual.simulate_keystrokes("right");
+        visual.run_until_parked();
         window
             .update(visual, |shell, _, _| {
                 let background = shell.workspace.project_appearance["/work/monocode"]
@@ -10248,6 +10255,7 @@ mod tests {
                 assert_eq!(background.effect, Effect::GradientBlur);
                 assert_eq!(background.scope, Scope::Empty);
                 assert!((background.empty_opacity - 0.36).abs() < 0.001);
+                assert_eq!(background.blur, 51);
                 let restored = Workspace::restore(
                     Some(&serde_json::to_string(&shell.workspace).unwrap()),
                     &[(active, "/work/monocode".into())],

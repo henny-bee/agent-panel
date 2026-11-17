@@ -367,7 +367,7 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         "chat-background",
         Section::Appearance,
         "Chat background",
-        "wallpaper image picture opacity backdrop",
+        "wallpaper image picture opacity backdrop blur frosted glass",
     ),
     (
         "transcript-layout",

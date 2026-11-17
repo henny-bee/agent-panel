@@ -165,6 +165,8 @@ pub struct Background {
     pub scope: Scope,
     pub empty_opacity: f32,
     pub session_opacity: f32,
+    /// Frosted glass: how far the artwork is blurred, 0 (sharp) to 100.
+    pub blur: u32,
 }
 impl Default for Background {
     fn default() -> Self {
@@ -174,6 +176,7 @@ impl Default for Background {
             scope: Scope::All,
             empty_opacity: 0.24,
             session_opacity: 0.24,
+            blur: 0,
         }
     }
 }
@@ -186,6 +189,7 @@ impl Background {
                 0.24
             };
         }
+        self.blur = self.blur.min(100);
     }
     pub fn opacity(&self, empty: bool) -> f32 {
         if !empty && self.scope == Scope::Empty {
@@ -253,6 +257,35 @@ pub fn import_image(
             .map_err(|e| format!("Cannot save image: {e}"))?;
     }
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// Frosted glass: the artwork blurred before any effect. `strength` runs 0 to
+/// 100; the widest blur spans about a fortieth of the artwork, so it looks
+/// the same at any resolution.
+pub fn frost(source: RgbaImage, strength: u32) -> RgbaImage {
+    if strength == 0 {
+        return source;
+    }
+    let (width, height) = source.dimensions();
+    let sigma = strength.min(100) as f32 / 100. * width.max(height) as f32 / 40.;
+    // A wide blur leaves no detail to keep: blur a smaller copy and scale it
+    // back up, which looks the same for a fraction of the work.
+    let shrink = (sigma / 4.).max(1.);
+    if shrink == 1. {
+        return imageops::blur(&source, sigma);
+    }
+    let small = imageops::resize(
+        &source,
+        ((width as f32 / shrink).ceil() as u32).max(1),
+        ((height as f32 / shrink).ceil() as u32).max(1),
+        imageops::FilterType::Triangle,
+    );
+    imageops::resize(
+        &imageops::blur(&small, sigma / shrink),
+        width,
+        height,
+        imageops::FilterType::CatmullRom,
+    )
 }
 
 pub fn background_fade(y: f32, empty: bool, haze: bool) -> f32 {
@@ -581,6 +614,36 @@ mod tests {
                 .0,
             [0, 0, 0, 100]
         );
+    }
+    #[test]
+    fn frost_softens_edges_keeps_the_size_and_grows_with_strength() {
+        // One hard edge: black on the left, white on the right.
+        let source = RgbaImage::from_fn(400, 200, |x, _| {
+            image::Rgba(if x < 200 { [0, 0, 0, 255] } else { [255, 255, 255, 255] })
+        });
+        assert_eq!(frost(source.clone(), 0), source);
+        // How many columns the edge is smeared across.
+        let spread = |image: &RgbaImage| {
+            (0..400)
+                .filter(|&x| (9..247).contains(&image.get_pixel(x, 100)[0]))
+                .count()
+        };
+        let (light, heavy) = (frost(source.clone(), 20), frost(source.clone(), 100));
+        assert_eq!(light.dimensions(), (400, 200));
+        assert_eq!(heavy.dimensions(), (400, 200));
+        assert!(spread(&light) > 2, "a light frost already softens the edge");
+        assert!(
+            spread(&heavy) > spread(&light) * 2,
+            "{} vs {}",
+            spread(&heavy),
+            spread(&light)
+        );
+        let mut background = Background {
+            blur: 400,
+            ..Default::default()
+        };
+        background.normalize();
+        assert_eq!(background.blur, 100);
     }
     #[test]
     fn project_settings_normalize_and_round_trip_without_crossing_projects() {
