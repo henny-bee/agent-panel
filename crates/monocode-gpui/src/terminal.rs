@@ -57,6 +57,9 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new(&format!("{m}-v"), Paste, c),
         KeyBinding::new(&format!("{m}-a"), SelectAll, c),
     ]);
+    // Windows Terminal convention: plain Ctrl+V pastes too.
+    #[cfg(windows)]
+    cx.bind_keys([KeyBinding::new("ctrl-v", Paste, c)]);
 }
 
 const FONT_SIZE: f32 = 13.;
