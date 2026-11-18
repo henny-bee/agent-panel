@@ -7,13 +7,14 @@ use crate::conversation::Conversation;
 use crate::right_panel::{AMBER_400, RED_400, stroke, tabular};
 use crate::theme::*;
 use gpui::{
-    AnyElement, Context, Entity, EventEmitter, FontWeight, Hsla, MouseButton, Role, ScrollHandle,
-    SharedString, Subscription, Task, WeakEntity, Window, div, prelude::*, px, relative, rgb,
+    AnyElement, Context, Entity, EventEmitter, FontWeight, FutureExt, Hsla, MouseButton, Role,
+    ScrollHandle, SharedString, Subscription, Task, WeakEntity, Window, div, prelude::*, px,
+    relative, rgb,
 };
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,11 +31,10 @@ const AGENT_COLORS: [u32; 8] = [
     0x60a5fa, 0xf472b6, 0xfb923c, 0xf87171, 0x4ade80, 0xa78bfa, 0x2dd4bf, 0xfacc15,
 ];
 
-/// One session's activity, read once a second while a panel shows it.
+/// One session's activity, read again as soon as its files change.
 pub(crate) struct ClaudeActivity {
     pub(crate) snapshot: Snapshot,
     cwd: String,
-    seen: Cell<Option<Instant>>,
     _poll: Task<()>,
 }
 
@@ -42,21 +42,19 @@ impl ClaudeActivity {
     pub(crate) fn new(conversation: WeakEntity<Conversation>, cx: &mut Context<Self>) -> Self {
         let poll = cx.spawn(async move |this, cx| {
             let mut tracker = activity::Tracker::default();
+            // The session's folder, and the signal its changes send.
+            let mut folder: Option<PathBuf> = None;
+            let mut changes = None;
             loop {
-                let source = this.update(cx, |this, cx| {
-                    let seen = this.seen.get();
-                    let watched = seen.is_some_and(|at| at.elapsed() < Duration::from_secs(3));
-                    watched
-                        .then(|| {
-                            conversation
-                                .upgrade()
-                                .and_then(|c| c.read(cx).claude_source())
-                        })
-                        .flatten()
+                let source = this.update(cx, |_, cx| {
+                    conversation
+                        .upgrade()
+                        .and_then(|c| c.read(cx).claude_source())
                 });
                 let Ok(source) = source else {
                     break;
                 };
+                let mut running = false;
                 if let Some((account, session, cwd, wide)) = source {
                     let (back, snapshot) = cx
                         .background_executor()
@@ -68,14 +66,14 @@ impl ClaudeActivity {
                         })
                         .await;
                     tracker = back;
+                    // A running agent's or background task's clock moves
+                    // even when nothing is written.
+                    running = !snapshot.background.is_empty()
+                        || snapshot
+                            .agents
+                            .iter()
+                            .any(|agent| agent.status == AgentStatus::Running);
                     let updated = this.update(cx, |this, cx| {
-                        // A running agent's or background task's clock moves
-                        // even when nothing is written.
-                        let running = !snapshot.background.is_empty()
-                            || snapshot
-                                .agents
-                                .iter()
-                                .any(|agent| agent.status == AgentStatus::Running);
                         if running || this.snapshot != snapshot || this.cwd != cwd {
                             this.snapshot = snapshot;
                             this.cwd = cwd;
@@ -85,14 +83,37 @@ impl ClaudeActivity {
                     if updated.is_err() {
                         break;
                     }
+                    if let Some(found) = tracker.transcript().and_then(Path::parent)
+                        && folder.as_deref() != Some(found)
+                    {
+                        let found = found.to_path_buf();
+                        folder = Some(found.clone());
+                        changes = cx
+                            .background_executor()
+                            .spawn(async move { crate::fs_watch::watch(&[found]) })
+                            .await;
+                    }
                 }
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                // A change wakes this at once. The timeout is the backup for a
+                // missed change, and the tick of a running clock.
+                let wait = Duration::from_secs(if running || changes.is_none() { 1 } else { 5 });
+                if let Some((_, signal)) = &changes {
+                    if let Ok(Err(_)) = signal
+                        .recv()
+                        .with_timeout(wait, cx.background_executor())
+                        .await
+                    {
+                        // The watcher stopped: poll instead.
+                        changes = None;
+                    }
+                } else {
+                    cx.background_executor().timer(wait).await;
+                }
             }
         });
         Self {
             snapshot: Snapshot::default(),
             cwd: String::new(),
-            seen: Cell::new(None),
             _poll: poll,
         }
     }
@@ -883,8 +904,6 @@ impl ClaudePanel {
 impl Render for ClaudePanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let activity = self.activity.read(cx);
-        // Showing the panel is what keeps the session's files being read.
-        activity.seen.set(Some(Instant::now()));
         let snapshot = activity.snapshot.clone();
         let cwd = activity.cwd.clone();
         let body = if !snapshot.loaded {

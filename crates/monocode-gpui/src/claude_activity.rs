@@ -706,6 +706,10 @@ pub(crate) struct Tracker {
 }
 
 impl Tracker {
+    /// The session's own transcript, once found.
+    pub(crate) fn transcript(&self) -> Option<&Path> {
+        self.transcript.as_deref()
+    }
     pub(crate) fn refresh(&mut self, account: &Profile, session: &str) {
         if self.session != session {
             *self = Self {
