@@ -326,6 +326,32 @@ fn parse_history_log_reads_records() {
 }
 
 #[test]
+fn staged_only_reads_one_file_status() {
+    let dir = tmp();
+    let dir = dir.path();
+    assert!(init_git_commit(
+        dir,
+        &[("a.txt", "a\n"), ("b [1].txt", "b\n")]
+    ));
+    assert!(!staged_only(dir, "a.txt").unwrap(), "unchanged");
+    std::fs::write(dir.join("a.txt"), "a\nb\n").unwrap();
+    assert!(!staged_only(dir, "a.txt").unwrap(), "unstaged");
+    assert!(git(dir, &["add", "a.txt"]));
+    assert!(staged_only(dir, "a.txt").unwrap(), "staged");
+    std::fs::write(dir.join("a.txt"), "a\nb\nc\n").unwrap();
+    assert!(
+        !staged_only(dir, "a.txt").unwrap(),
+        "staged and changed again"
+    );
+    std::fs::write(dir.join("new.txt"), "n\n").unwrap();
+    assert!(!staged_only(dir, "new.txt").unwrap(), "untracked");
+    // Brackets are a path, not a glob.
+    std::fs::write(dir.join("b [1].txt"), "b\nc\n").unwrap();
+    assert!(git(dir, &["--literal-pathspecs", "add", "b [1].txt"]));
+    assert!(staged_only(dir, "b [1].txt").unwrap());
+}
+
+#[test]
 fn commit_details_read_message_stat_and_web_page() {
     let dir = tmp();
     let dir = dir.path();

@@ -146,7 +146,41 @@ impl MediaPreview {
         source: Option<Arc<document::TemporaryMedia>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut this = Self {
+        #[cfg(target_os = "macos")]
+        let poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.visible
+                            && let Some(video) = &this.video
+                            && let Some((width, height, duration, failed)) = video.metadata()
+                            && (this.width != width
+                                || this.height != height
+                                || this.duration != Some(duration)
+                                || this.failed != failed)
+                        {
+                            this.width = width;
+                            this.height = height;
+                            this.duration = Some(duration);
+                            this.failed = failed;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+        #[cfg(not(target_os = "macos"))]
+        let poll = {
+            let _ = cx;
+            None
+        };
+        Self {
             format: PathBuf::from(&path)
                 .extension()
                 .unwrap_or_default()
@@ -175,39 +209,9 @@ impl MediaPreview {
                     .map(|source| source.path().to_string_lossy().into_owned())
                     .unwrap_or(path),
             )),
-            _poll: None,
+            _poll: poll,
             _source: source,
-        };
-        this._poll = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(250))
-                    .await;
-                if this
-                    .update(cx, |this, cx| {
-                        #[cfg(target_os = "macos")]
-                        if this.visible
-                            && let Some(video) = &this.video
-                            && let Some((width, height, duration, failed)) = video.metadata()
-                            && (this.width != width
-                                || this.height != height
-                                || this.duration != Some(duration)
-                                || this.failed != failed)
-                        {
-                            this.width = width;
-                            this.height = height;
-                            this.duration = Some(duration);
-                            this.failed = failed;
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
-        this
+        }
     }
     pub(super) fn same_video(&self, size: u64, modified: Option<std::time::SystemTime>) -> bool {
         self.image.is_none() && self.size == size && self.modified == modified
@@ -335,6 +339,8 @@ impl MediaPreview {
 }
 impl gpui::Render for MediaPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
         let is_image = self.image.is_some();
         #[cfg(target_os = "macos")]
         if self.failed

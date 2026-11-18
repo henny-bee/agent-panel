@@ -1,7 +1,9 @@
 //! Generated HTML lives in an opaque sandbox with no app bridge or network.
+#[cfg(target_os = "macos")]
+use gpui::canvas;
 #[cfg(not(target_os = "macos"))]
 use gpui::div;
-use gpui::{Context, Window, canvas, prelude::*};
+use gpui::{Context, Window, prelude::*};
 #[cfg(target_os = "macos")]
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
@@ -102,12 +104,15 @@ pub(super) struct Html {
     #[cfg(target_os = "macos")]
     view: Rc<RefCell<Option<Hosted>>>,
 }
+// Only the macOS web view shows the sandbox; its test runs everywhere.
+#[cfg(any(target_os = "macos", test))]
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+#[cfg(any(target_os = "macos", test))]
 fn sandbox(body: &str) -> String {
     let color = |value: gpui::Hsla| {
         let value: gpui::Rgba = value.into();

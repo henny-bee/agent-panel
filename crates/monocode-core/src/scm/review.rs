@@ -204,6 +204,35 @@ pub fn file_diff_versions(
     Ok(versions)
 }
 
+/// Whether the file's only change is staged: one `git status` for its path,
+/// not the whole changes index.
+pub fn staged_only(cwd: &Path, relative: &str) -> Result<bool, String> {
+    if remote_workspace::is_remote(cwd) {
+        let index = diff_files(cwd)?;
+        return Ok(index
+            .files
+            .iter()
+            .any(|f| f.relative == relative && f.staged && !f.unstaged));
+    }
+    let root = expand_home(cwd);
+    let relative = resolve_repo_path(&root, relative)?;
+    let status = git_run(
+        &root,
+        &[
+            "--literal-pathspecs",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--no-renames",
+            "--",
+            &relative,
+        ],
+    )
+    .ok_or_else(|| "Could not read Git status".to_string())?;
+    // XY: the index side changed, the working tree did not.
+    Ok(matches!(status.as_bytes(), [x, b' ', ..] if !matches!(x, b' ' | b'?')))
+}
+
 /// One file's index or HEAD side against its other side. `staged` compares
 /// HEAD with the index; otherwise the index with the working tree.
 pub fn file_diff(cwd: &Path, relative: &str, staged: bool) -> Result<FileDiff, String> {

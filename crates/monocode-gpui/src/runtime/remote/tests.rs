@@ -3,7 +3,7 @@ use monocode_core::remote::{Connections, Machine};
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::AtomicUsize,
     thread,
     time::Instant,
@@ -463,6 +463,7 @@ fn explicit_stop_is_journaled_once_for_the_observed_run() {
 fn built_node_host_round_trip_preserves_native_wire_commands() {
     use std::{
         os::unix::fs::PermissionsExt,
+        path::Path,
         process::{Command, Stdio},
     };
     let directory = Directory::new();

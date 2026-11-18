@@ -217,6 +217,7 @@ fn spawn(cwd: &str, size: GridSize, id: u64, program: Option<Program>) -> Spawne
         cell_width: 8,
         cell_height: 16,
     };
+    #[cfg_attr(windows, allow(unused_mut))]
     let mut master_fd = -1;
     let mut shell_pid = 0;
     let sender = match tty::new(&options, window, id) {
@@ -1548,6 +1549,8 @@ impl Terminal {
         agent_cli(self.foreground.as_deref()?)
     }
 }
+/// Only Unix reads the foreground job.
+#[cfg(any(unix, test))]
 fn is_shell_name(name: &str) -> bool {
     matches!(
         name,

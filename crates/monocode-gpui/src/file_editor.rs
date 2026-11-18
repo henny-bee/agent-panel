@@ -561,6 +561,12 @@ impl FileEditor {
         cx.notify();
     }
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        // A read can outlast the 2 second poll where starting git is slow
+        // (Windows). Restarting it then cancels every read before it lands,
+        // so a running one finishes and the next poll picks up later changes.
+        if self.git_task.is_some() {
+            return;
+        }
         let cwd = PathBuf::from(&self.cwd);
         let Ok(relative) = PathBuf::from(&self.path)
             .strip_prefix(&cwd)
@@ -569,12 +575,7 @@ impl FileEditor {
             return;
         };
         let work = cx.background_executor().spawn(async move {
-            let files = monocode_core::scm::diff_files(&cwd).ok()?;
-            let staged = files
-                .files
-                .iter()
-                .find(|f| f.relative == relative)
-                .is_some_and(|f| f.staged && !f.unstaged);
+            let staged = monocode_core::scm::staged_only(&cwd, &relative).ok()?;
             let diff = monocode_core::scm::file_diff(&cwd, &relative, staged).ok()?;
             (!diff.binary && !diff.too_large).then(|| {
                 (
@@ -593,6 +594,7 @@ impl FileEditor {
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                this.git_task = None;
                 let original = result.map(|(original, staged, line_ending)| {
                     this.git_staged = staged;
                     this.git_line_ending = line_ending;

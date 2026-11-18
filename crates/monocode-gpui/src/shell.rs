@@ -859,6 +859,8 @@ pub(crate) struct Shell {
     shown: HashSet<i64>,
 }
 impl Shell {
+    /// Only Unix opens another window onto the running app.
+    #[cfg(any(unix, test))]
     pub(crate) fn new(
         store: Database,
         summaries: Vec<Session>,

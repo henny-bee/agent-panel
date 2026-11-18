@@ -372,6 +372,10 @@ struct Log {
     background: Vec<Task>,
     /// Tool and task ids of background work that ended.
     finished: HashSet<String>,
+    /// Shell calls in the reply being read: one that outlives its timeout, or
+    /// that the user sends away, comes back with a task id.
+    shells: Vec<(String, Background)>,
+    reply: String,
 }
 
 impl Log {
@@ -501,6 +505,11 @@ impl Log {
             self.peak = self.peak.max(used);
         }
         if let Some(id) = message["id"].as_str() {
+            // Every call of the last reply has its result by now.
+            if self.reply != id {
+                self.reply = id.to_owned();
+                self.shells.clear();
+            }
             self.usage.insert(
                 id.to_owned(),
                 (model.to_owned(), Usage::from(&message["usage"])),
@@ -531,24 +540,30 @@ impl Log {
         let path = |key: &str| input[key].as_str().filter(|p| !p.is_empty());
         // Agents write the flag as a string.
         let flag = &input["run_in_background"];
-        if name == "Monitor" || *flag == true || *flag == "true" {
+        let background = name == "Monitor" || *flag == true || *flag == "true";
+        if background || matches!(name, "Bash" | "PowerShell") {
             let text = |key: &str| input[key].as_str().filter(|t| !t.trim().is_empty());
             let detail = text("command").or(text("description")).unwrap_or_default();
-            self.background.push(Task {
-                tool_id: id.to_owned(),
-                task_id: String::new(),
-                until: (name == "Monitor").then(|| {
-                    at.0 + input["timeout_ms"]
-                        .as_i64()
-                        .unwrap_or(300_000)
-                        .min(1_800_000)
-                }),
-                shown: Background {
-                    tool: name.to_owned(),
-                    detail: detail.trim().lines().next().unwrap_or_default().to_owned(),
-                    started: at.0,
-                },
-            });
+            let shown = Background {
+                tool: name.to_owned(),
+                detail: detail.trim().lines().next().unwrap_or_default().to_owned(),
+                started: at.0,
+            };
+            if background {
+                self.background.push(Task {
+                    tool_id: id.to_owned(),
+                    task_id: String::new(),
+                    until: (name == "Monitor").then(|| {
+                        at.0 + input["timeout_ms"]
+                            .as_i64()
+                            .unwrap_or(300_000)
+                            .min(1_800_000)
+                    }),
+                    shown,
+                });
+            } else {
+                self.shells.push((id.to_owned(), shown));
+            }
         }
         match name {
             "Read" => path("file_path")
@@ -602,10 +617,18 @@ impl Log {
             let task = result["backgroundTaskId"]
                 .as_str()
                 .or(result["agentId"].as_str());
-            if let Some(task) = task
-                && let Some(call) = self.background.iter_mut().find(|t| t.tool_id == id)
-            {
-                call.task_id = task.to_owned();
+            if let Some(task) = task {
+                if let Some(call) = self.background.iter_mut().find(|t| t.tool_id == id) {
+                    call.task_id = task.to_owned();
+                } else if let Some(ix) = self.shells.iter().position(|(tool, _)| tool == id) {
+                    let (tool_id, shown) = self.shells.swap_remove(ix);
+                    self.background.push(Task {
+                        tool_id,
+                        task_id: task.to_owned(),
+                        until: None,
+                        shown,
+                    });
+                }
             }
         }
         let text = message_text(&entry["message"]["content"]);
@@ -1122,6 +1145,23 @@ mod tests {
         assert_eq!(
             tracker.snapshot(&account, 0, false).context_window,
             1_000_000
+        );
+        // A command that outlives its timeout moves to the background.
+        feed(
+            &mut tracker.main,
+            &[
+                &call("b4", "Bash", r#"{"command":"cargo test --all"}"#, 9, "10"),
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b4"}]},"toolUseResult":{"backgroundTaskId":"bg4","timedOutAfterMs":600000}}"#,
+                &call("b5", "Bash", r#"{"command":"git status"}"#, 9, "11"),
+            ],
+        );
+        assert_eq!(
+            running(&tracker, at("2026-11-17T10:00:30.000Z")),
+            [
+                "Bash npm run build",
+                "Monitor tail -f log",
+                "Bash cargo test --all"
+            ]
         );
     }
 
