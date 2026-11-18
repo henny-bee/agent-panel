@@ -57,23 +57,25 @@ impl ClaudeActivity {
                 let Ok(source) = source else {
                     break;
                 };
-                if let Some((account, session, cwd)) = source {
+                if let Some((account, session, cwd, wide)) = source {
                     let (back, snapshot) = cx
                         .background_executor()
                         .spawn(async move {
                             tracker.refresh(&account, &session);
                             let now = monocode_core::time::now_ms() as i64;
-                            let snapshot = tracker.snapshot(&account, now);
+                            let snapshot = tracker.snapshot(&account, now, wide);
                             (tracker, snapshot)
                         })
                         .await;
                     tracker = back;
                     let updated = this.update(cx, |this, cx| {
-                        // A running agent's clock moves even when nothing is written.
-                        let running = snapshot
-                            .agents
-                            .iter()
-                            .any(|agent| agent.status == AgentStatus::Running);
+                        // A running agent's or background task's clock moves
+                        // even when nothing is written.
+                        let running = !snapshot.background.is_empty()
+                            || snapshot
+                                .agents
+                                .iter()
+                                .any(|agent| agent.status == AgentStatus::Running);
                         if running || this.snapshot != snapshot || this.cwd != cwd {
                             this.snapshot = snapshot;
                             this.cwd = cwd;
@@ -441,6 +443,9 @@ impl ClaudePanel {
                 )
                 .into_any_element(),
         ];
+        if snapshot.context_used > 0 {
+            out.push(context_box(snapshot.context_used, snapshot.context_window));
+        }
         if !snapshot.todos.is_empty() {
             let done = snapshot
                 .todos
@@ -494,26 +499,57 @@ impl ClaudePanel {
             ));
         }
         if !snapshot.mcp.is_empty() {
-            let rows = snapshot
-                .mcp
-                .iter()
-                .enumerate()
-                .map(|(ix, (server, tools))| {
-                    let name = activity::server_name(server);
-                    let calls = tools.iter().map(|(_, n)| n).sum::<u32>();
-                    let names = tools
-                        .iter()
-                        .map(|(t, _)| t.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    tool_row(ix > 0, None, name, Some(names), calls)
-                });
+            let mut rows = Vec::new();
+            for (ix, (server, tools)) in snapshot.mcp.iter().enumerate() {
+                let key = format!("mcp:{server}");
+                let open = self.open.contains(&key);
+                let total = tools.iter().map(|(_, n)| n).sum::<u32>();
+                rows.push(
+                    tool_row(
+                        ix > 0,
+                        None,
+                        Some(open),
+                        activity::server_name(server),
+                        total,
+                    )
+                    .id(SharedString::from(key.clone()))
+                    .role(Role::Button)
+                    .aria_expanded(open)
+                    .rounded_md()
+                    .hover(|s| s.bg(content(0.05)))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
+                    .into_any_element(),
+                );
+                if open {
+                    rows.extend(tools.iter().map(|(tool, n)| {
+                        div()
+                            .h(px(24.))
+                            .pl(px(34.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(crate::fonts::mono())
+                                    .text_size(px(11.))
+                                    .text_color(content(0.75))
+                                    .child(tool.clone()),
+                            )
+                            .child(calls(*n))
+                            .into_any_element()
+                    }));
+                }
+            }
             out.push(self.section(
                 "mcp",
                 "mcp",
                 "MCP",
                 snapshot.mcp.len().to_string(),
-                rows.collect(),
+                rows,
                 cx,
             ));
         }
@@ -523,13 +559,65 @@ impl ClaudePanel {
                 .iter()
                 .enumerate()
                 .map(|(ix, (name, calls))| {
-                    tool_row(ix > 0, Some(tool_icon(name)), name.clone(), None, *calls)
+                    tool_row(ix > 0, Some(tool_icon(name)), None, name.clone(), *calls)
+                        .into_any_element()
                 });
             out.push(self.section(
                 "tools",
                 "lucide-wrench",
                 "Tools",
                 snapshot.tools.len().to_string(),
+                rows.collect(),
+                cx,
+            ));
+        }
+        if !snapshot.background.is_empty() {
+            let now = monocode_core::time::now_ms() as i64;
+            let rows = snapshot.background.iter().enumerate().map(|(ix, task)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_h(px(34.))
+                    .py(px(4.))
+                    .when(ix > 0, |d| d.border_t_1().border_color(stroke()))
+                    .child(icon(tool_icon(&task.tool), 14.).text_color(content(0.75)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(content(0.88))
+                                    .child(task.tool.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(crate::fonts::mono())
+                                    .text_size(px(10.5))
+                                    .text_color(content(0.45))
+                                    .child(task.detail.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_features(tabular())
+                            .text_size(px(11.))
+                            .text_color(rgb(RED_400))
+                            .child(duration(now - task.started)),
+                    )
+                    .into_any_element()
+            });
+            out.push(self.section(
+                "background",
+                "lucide-activity",
+                "Run in Background",
+                snapshot.background.len().to_string(),
                 rows.collect(),
                 cx,
             ));
@@ -864,15 +952,15 @@ fn stat(label: &'static str, value: String) -> AnyElement {
         .into_any_element()
 }
 
-/// An MCP server (letter badge and the tools it ran) or a built-in tool (its
-/// icon), with a line above every row but the first.
+/// An MCP server (letter badge and a fold arrow, `open`) or a built-in tool
+/// (its icon), with a line above every row but the first.
 fn tool_row(
     divider: bool,
     glyph: Option<&'static str>,
+    open: Option<bool>,
     name: String,
-    tools: Option<String>,
-    calls: u32,
-) -> AnyElement {
+    count: u32,
+) -> gpui::Div {
     let letter = name
         .chars()
         .next()
@@ -903,42 +991,110 @@ fn tool_row(
                     .child(letter),
             ),
         })
+        .when_some(open, |d, open| {
+            d.child(
+                icon(
+                    if open {
+                        "chevron-down"
+                    } else {
+                        "chevron-right"
+                    },
+                    12.,
+                )
+                .text_color(content(0.6)),
+            )
+        })
         .child(
             div()
                 .flex_1()
                 .min_w_0()
+                .truncate()
+                .text_size(px(12.))
+                .text_color(content(0.88))
+                .when(open.is_some(), |d| d.font_weight(FontWeight::SEMIBOLD))
+                .child(name),
+        )
+        .child(calls(count))
+}
+
+/// "12 Calls", the count in red.
+fn calls(count: u32) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .gap_1()
+        .text_size(px(11.))
+        .font_features(tabular())
+        .child(div().text_color(rgb(RED_400)).child(count.to_string()))
+        .child(
+            div()
+                .text_color(content(0.5))
+                .child(if count == 1 { "Call" } else { "Calls" }),
+        )
+}
+
+/// How full the main chat's context is: white, amber past 70%, red past 90%.
+fn context_box(used: u64, window: u64) -> AnyElement {
+    let ratio = (used as f32 / window.max(1) as f32).min(1.);
+    let fill: Hsla = if ratio > 0.9 {
+        rgb(RED_400).into()
+    } else if ratio > 0.7 {
+        rgb(AMBER_400).into()
+    } else {
+        content(0.9)
+    };
+    let format = monocode_core::context::format_tokens;
+    div()
+        .mx_3()
+        .mb_2()
+        .px(px(10.))
+        .pt(px(10.))
+        .pb(px(12.))
+        .rounded_lg()
+        .border_1()
+        .border_color(stroke())
+        .bg(content(0.03))
+        .id("claude-context-window")
+        .role(Role::Meter)
+        .aria_label(SharedString::from(format!(
+            "Context window, {} of {} tokens",
+            format(used),
+            format(window)
+        )))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon("lucide-layers", 15.).text_color(content(0.8)))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .truncate()
-                        .text_size(px(12.))
-                        .text_color(content(0.88))
-                        .when(tools.is_some(), |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .child(name),
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(content(0.92))
+                        .child("Context Window"),
                 )
-                .when_some(tools, |d, tools| {
-                    d.child(
-                        div()
-                            .truncate()
-                            .font_family(crate::fonts::mono())
-                            .text_size(px(10.5))
-                            .text_color(content(0.45))
-                            .child(tools),
-                    )
-                }),
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_features(tabular())
+                        .text_size(px(11.))
+                        .text_color(content(0.5))
+                        .child(format!("{} / {} tokens", format(used), format(window))),
+                ),
         )
         .child(
             div()
-                .flex_shrink_0()
-                .flex()
-                .gap_1()
-                .text_size(px(11.))
-                .font_features(tabular())
-                .child(div().text_color(rgb(RED_400)).child(calls.to_string()))
-                .child(div().text_color(content(0.5)).child(if calls == 1 {
-                    "Call"
-                } else {
-                    "Calls"
-                })),
+                .mt_2()
+                .h(px(6.))
+                .w_full()
+                .overflow_hidden()
+                .rounded_full()
+                .bg(content(0.08))
+                .child(div().h_full().w(relative(ratio)).rounded_full().bg(fill)),
         )
         .into_any_element()
 }

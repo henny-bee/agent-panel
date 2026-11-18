@@ -50,14 +50,18 @@ impl Conversation {
     }
 
     /// The account, Claude session id and working folder the activity
-    /// panels read; none until Claude has a session.
+    /// panels read, and whether the model has a 1M window; none until Claude
+    /// has a session.
     pub(crate) fn claude_source(
         &self,
-    ) -> Option<(monocode_core::accounts::Profile, String, String)> {
+    ) -> Option<(monocode_core::accounts::Profile, String, String, bool)> {
         Some((
             self.settings.account.clone(),
             self.summary.provider_id.clone()?,
             self.execution_cwd().to_owned(),
+            self.model
+                .as_deref()
+                .is_some_and(|model| model.to_ascii_lowercase().ends_with("[1m]")),
         ))
     }
 

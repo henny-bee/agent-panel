@@ -472,8 +472,7 @@ impl Explorer {
             )
             .into_any_element()
     }
-    /// New file, new folder and collapse act on the tree, so bring it back
-    /// from B or B2 first.
+    /// Collapse acts on the tree, so bring it back from B or B2 first.
     fn show_tree(&mut self, cx: &mut Context<Self>) {
         if self.claude_tab.is_some() {
             self.show_claude(None, cx);
@@ -1836,25 +1835,6 @@ impl Render for Explorer {
             .child(
                 pane_header("explorer-header", "Explorer")
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_tree(cx);
-                                this.start_create(false, None, window, cx)
-                            })),
-                    )
-                    .child(
-                        Self::header_icon(
-                            "explorer-new-folder",
-                            "New Folder".into(),
-                            "folder-add",
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_tree(cx);
-                            this.start_create(true, None, window, cx)
-                        })),
-                    )
                     .child(
                         Self::header_icon(
                             "explorer-collapse",

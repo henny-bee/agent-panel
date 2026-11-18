@@ -467,10 +467,11 @@ mod tests {
         // Only the Claude pane's Explorer offers the agent views.
         assert!(visual.debug_bounds("explorer-claude-agents").is_some());
         assert!(visual.debug_bounds("explorer-claude-chat").is_some());
-        // New File over an agent view brings the tree (and its folder box) back.
+        // Collapse All over an agent view brings the tree (and its folder box) back.
         assert!(visual.debug_bounds("explorer-folder-pick").is_none());
-        let new_file = visual.debug_bounds("explorer-new-file").unwrap().center();
-        visual.simulate_click(new_file, gpui::Modifiers::none());
+        assert!(visual.debug_bounds("explorer-new-file").is_none());
+        let collapse = visual.debug_bounds("explorer-collapse").unwrap().center();
+        visual.simulate_click(collapse, gpui::Modifiers::none());
         visual
             .update_window(window.into(), |_, window, cx| {
                 window.simulate_next_frame(cx);

@@ -64,6 +64,15 @@ pub(crate) const FILE_KINDS: [FileKind; 4] = [
     FileKind::Written,
 ];
 
+/// Work Claude left running: a shell command, subagent or monitor.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Background {
+    pub tool: String,
+    /// The command, or the description when there is none.
+    pub detail: String,
+    pub started: i64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Snapshot {
     /// False until the first read finishes.
@@ -86,6 +95,11 @@ pub(crate) struct Snapshot {
     pub context: Vec<String>,
     /// Skills by name without the slash, with how often each was used.
     pub skills: Vec<(String, u32)>,
+    /// The main chat's context as of its last reply, and the window it fills.
+    pub context_used: u64,
+    pub context_window: u64,
+    /// Background work still running, oldest first.
+    pub background: Vec<Background>,
 }
 
 /// When something was used: its transcript time, then its line, which orders
@@ -314,6 +328,16 @@ fn message_text(content: &Value) -> String {
     }
 }
 
+/// A background call, matched to its end by tool id or, once its result
+/// names one, task id.
+struct Task {
+    tool_id: String,
+    task_id: String,
+    /// A monitor is killed at its deadline, which leaves no record.
+    until: Option<i64>,
+    shown: Background,
+}
+
 /// One transcript file, read incrementally.
 #[derive(Default)]
 struct Log {
@@ -342,6 +366,12 @@ struct Log {
     steps: Vec<String>,
     /// The latest task notification per agent id: status and when.
     notices: HashMap<String, (AgentStatus, i64)>,
+    /// The context the last reply was sent with, and the most it reached.
+    used: u64,
+    peak: u64,
+    background: Vec<Task>,
+    /// Tool and task ids of background work that ended.
+    finished: HashSet<String>,
 }
 
 impl Log {
@@ -409,12 +439,15 @@ impl Log {
             }
             self.last = self.last.max(time);
         }
-        const WANTED: [&str; 5] = [
+        const WANTED: [&str; 8] = [
             "\"type\":\"assistant\"",
             "\"type\":\"instructions\"",
             "<task-notification>",
             "<command-message>",
             "\"type\":\"create\"",
+            "\"backgroundTaskId\"",
+            "\"async_launched\"",
+            "\"compact_boundary\"",
         ];
         if !WANTED.iter().any(|marker| line.contains(marker)) {
             return;
@@ -437,6 +470,22 @@ impl Log {
                     }
                 }
             }
+            // A notice that arrives while Claude works is queued here first.
+            Some("attachment") => {
+                if let Some(text) = entry["attachment"]["prompt"].as_str() {
+                    self.notices(text, self.last);
+                }
+            }
+            Some("queue-operation") => {
+                if let Some(text) = entry["content"].as_str() {
+                    self.notices(text, self.last);
+                }
+            }
+            Some("system") if entry["subtype"] == "compact_boundary" => {
+                if let Some(after) = entry["compactMetadata"]["postTokens"].as_u64() {
+                    self.used = after;
+                }
+            }
             _ => {}
         }
     }
@@ -447,6 +496,10 @@ impl Log {
             return;
         }
         self.model = model.to_owned();
+        if let Some(used) = monocode_core::context::claude_used(&message["usage"]) {
+            self.used = used;
+            self.peak = self.peak.max(used);
+        }
         if let Some(id) = message["id"].as_str() {
             self.usage.insert(
                 id.to_owned(),
@@ -476,6 +529,27 @@ impl Log {
             self.steps.push(step(name, input));
         }
         let path = |key: &str| input[key].as_str().filter(|p| !p.is_empty());
+        // Agents write the flag as a string.
+        let flag = &input["run_in_background"];
+        if name == "Monitor" || *flag == true || *flag == "true" {
+            let text = |key: &str| input[key].as_str().filter(|t| !t.trim().is_empty());
+            let detail = text("command").or(text("description")).unwrap_or_default();
+            self.background.push(Task {
+                tool_id: id.to_owned(),
+                task_id: String::new(),
+                until: (name == "Monitor").then(|| {
+                    at.0 + input["timeout_ms"]
+                        .as_i64()
+                        .unwrap_or(300_000)
+                        .min(1_800_000)
+                }),
+                shown: Background {
+                    tool: name.to_owned(),
+                    detail: detail.trim().lines().next().unwrap_or_default().to_owned(),
+                    started: at.0,
+                },
+            });
+        }
         match name {
             "Read" => path("file_path")
                 .into_iter()
@@ -489,6 +563,12 @@ impl Log {
             "Write" => {
                 if let Some(path) = path("file_path") {
                     self.writes.push((id.to_owned(), path.to_owned(), at));
+                }
+            }
+            // A stop leaves no notice behind.
+            "TaskStop" | "KillShell" | "KillBash" => {
+                if let Some(task) = input["task_id"].as_str().or(input["shell_id"].as_str()) {
+                    self.finished.insert(task.to_owned());
                 }
             }
             "Skill" => {
@@ -514,10 +594,19 @@ impl Log {
     }
 
     fn user(&mut self, entry: &Value) {
-        if entry["toolUseResult"]["type"] == "create"
-            && let Some(id) = entry["message"]["content"][0]["tool_use_id"].as_str()
-        {
-            self.created.insert(id.to_owned());
+        let result = &entry["toolUseResult"];
+        if let Some(id) = entry["message"]["content"][0]["tool_use_id"].as_str() {
+            if result["type"] == "create" {
+                self.created.insert(id.to_owned());
+            }
+            let task = result["backgroundTaskId"]
+                .as_str()
+                .or(result["agentId"].as_str());
+            if let Some(task) = task
+                && let Some(call) = self.background.iter_mut().find(|t| t.tool_id == id)
+            {
+                call.task_id = task.to_owned();
+            }
         }
         let text = message_text(&entry["message"]["content"]);
         // A skill typed as a slash command names its message first; built-in
@@ -533,10 +622,23 @@ impl Log {
             .as_str()
             .and_then(millis)
             .unwrap_or(self.last);
+        self.notices(&text, time);
+    }
+
+    /// Every status a notice carries is an end: completed, failed, killed or
+    /// stopped.
+    fn notices(&mut self, text: &str, time: i64) {
         for notice in text.split("<task-notification>").skip(1) {
             let (Some(task), Some(status)) = (tag(notice, "task-id"), tag(notice, "status")) else {
                 continue;
             };
+            let ids = [Some(task), tag(notice, "tool-use-id")];
+            self.finished.extend(
+                ids.into_iter()
+                    .flatten()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned),
+            );
             let status = match status {
                 "completed" => AgentStatus::Done,
                 "failed" => AgentStatus::Failed,
@@ -623,7 +725,8 @@ impl Tracker {
         }
     }
 
-    pub(crate) fn snapshot(&self, account: &Profile, now: i64) -> Snapshot {
+    /// `wide` is a model picked with a 1M window.
+    pub(crate) fn snapshot(&self, account: &Profile, now: i64, wide: bool) -> Snapshot {
         let logs = || std::iter::once(&self.main).chain(self.agents.values().map(|a| &a.log));
         let mut agents: Vec<Agent> = self
             .agents
@@ -661,6 +764,21 @@ impl Tracker {
             }
         }
         builtin.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let finished: HashSet<&String> = logs().flat_map(|log| &log.finished).collect();
+        let mut background: Vec<Background> = logs()
+            .flat_map(|log| &log.background)
+            .filter(|t| !finished.contains(&t.tool_id) && !finished.contains(&t.task_id))
+            .filter(|t| t.until.is_none_or(|until| now < until))
+            // A background agent also ends when its own transcript says so.
+            .filter(|t| {
+                agents
+                    .iter()
+                    .find(|agent| agent.id == t.task_id)
+                    .is_none_or(|agent| agent.status == AgentStatus::Running)
+            })
+            .map(|t| t.shown.clone())
+            .collect();
+        background.sort_by_key(|b| b.started);
         Snapshot {
             loaded: true,
             agents,
@@ -685,6 +803,14 @@ impl Tracker {
                     (name, uses)
                 })
                 .collect(),
+            context_used: self.main.used,
+            // ponytail: the CLI does not record the window; past 200K it must be 1M.
+            context_window: if wide || self.main.peak > 200_000 {
+                1_000_000
+            } else {
+                200_000
+            },
+            background,
         }
     }
 
@@ -884,6 +1010,119 @@ mod tests {
         merged.merge(&agent.files[0]);
         assert_eq!(merged.recent(), ["/p/c.rs", "/p/a.rs", "/p/b.rs"]);
         assert_eq!(merged.counts["/p/a.rs"], 2);
+    }
+
+    #[test]
+    fn follows_background_work_until_it_ends_and_the_context_it_fills() {
+        let call = |id: &str, name: &str, input: &str, used: u32, second: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"id":"m{id}","model":"claude-opus-5-5","usage":{{"input_tokens":10,"cache_read_input_tokens":{used}}},"content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{input}}}]}},"timestamp":"2026-11-17T10:00:{second}.000Z"}}"#
+            )
+        };
+        let mut tracker = Tracker::default();
+        feed(
+            &mut tracker.main,
+            &[
+                &call(
+                    "b1",
+                    "Bash",
+                    r#"{"command":"npm run build\nnpm test","run_in_background":true}"#,
+                    9,
+                    "01",
+                ),
+                &call(
+                    "b2",
+                    "Bash",
+                    r#"{"command":"cargo test","run_in_background":true}"#,
+                    9,
+                    "02",
+                ),
+                &call(
+                    "b3",
+                    "PowerShell",
+                    r#"{"command":"Start-Sleep 99","run_in_background":true}"#,
+                    9,
+                    "03",
+                ),
+                &call(
+                    "a1",
+                    "Agent",
+                    r#"{"description":"Review the diff","prompt":"p","run_in_background":"true"}"#,
+                    9,
+                    "04",
+                ),
+                &call(
+                    "m1",
+                    "Monitor",
+                    r#"{"command":"tail -f log","description":"errors","timeout_ms":60000}"#,
+                    9,
+                    "05",
+                ),
+                &call("r1", "Read", r#"{"file_path":"/p/a.rs"}"#, 150_000, "06"),
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b3"}]},"toolUseResult":{"backgroundTaskId":"bg3"}}"#,
+                // Ended by a notice queued while Claude worked, and by a stop.
+                r#"{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>bg2</task-id>\n<tool-use-id>b2</tool-use-id>\n<status>completed</status>\n</task-notification>","timestamp":"2026-11-17T10:00:07.000Z"}"#,
+                &call("s1", "TaskStop", r#"{"task_id":"bg3"}"#, 9, "08"),
+            ],
+        );
+        let account = Profile::default();
+        let at = |time: &str| millis(time).unwrap();
+        let running = |tracker: &Tracker, now: i64| {
+            let snapshot = tracker.snapshot(&account, now, false);
+            let shown = snapshot.background.iter();
+            shown
+                .map(|b| format!("{} {}", b.tool, b.detail))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            running(&tracker, at("2026-11-17T10:00:30.000Z")),
+            [
+                "Bash npm run build",
+                "Agent Review the diff",
+                "Monitor tail -f log"
+            ]
+        );
+        // A monitor dies at its deadline without a word.
+        assert_eq!(
+            running(&tracker, at("2026-11-17T10:01:10.000Z")),
+            ["Bash npm run build", "Agent Review the diff"]
+        );
+        feed(
+            &mut tracker.main,
+            &[
+                r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>x</task-id>\n<tool-use-id>a1</tool-use-id>\n<status>killed</status>\n</task-notification>"},"timestamp":"2026-11-17T10:00:09.000Z"}"#,
+            ],
+        );
+        assert_eq!(
+            running(&tracker, at("2026-11-17T10:00:30.000Z")),
+            ["Bash npm run build", "Monitor tail -f log"]
+        );
+        // The context is the last reply's; a compaction shrinks it.
+        let snapshot = tracker.snapshot(&account, 0, false);
+        assert_eq!(
+            (snapshot.context_used, snapshot.context_window),
+            (19, 200_000)
+        );
+        feed(
+            &mut tracker.main,
+            &[
+                r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"postTokens":20004}}"#,
+            ],
+        );
+        assert_eq!(tracker.snapshot(&account, 0, false).context_used, 20004);
+        assert_eq!(
+            tracker.snapshot(&account, 0, true).context_window,
+            1_000_000
+        );
+        // Past 200K, the window can only be 1M.
+        feed(
+            &mut tracker.main,
+            &[&call("r2", "Read", "{}", 250_000, "09")],
+        );
+        assert_eq!(
+            tracker.snapshot(&account, 0, false).context_window,
+            1_000_000
+        );
     }
 
     #[test]
