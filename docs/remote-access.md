@@ -1,7 +1,7 @@
 # Remote access (experimental)
 
 > [!NOTE]
-> Remote sessions come from Monocode and haven't been tested in MCode. SSH setup downloads the host package from [Monocode's GitHub releases](https://github.com/hardbeat920/monocode/releases) for the matching version, because MCode publishes no releases of its own.
+> Remote sessions come from Monocode and haven't been tested in MCode. SSH setup downloads the host package from [Monocode's GitHub releases](https://github.com/hardbeat920/monocode/releases) for the matching version, because MCode publishes no releases of its own. MCode doesn't include the host's source code; it's in the [Monocode repository](https://github.com/hardbeat920/monocode).
 
 MCode can run Claude Code, Codex, Cursor, Grok Build, OpenCode, Pi, OMP, fx, Hermes Agent, Antigravity, and Devin sessions on a separate Windows, Linux, or macOS host. The host owns the provider processes and session database. Closing the desktop, closing a session tab, or losing the SSH tunnel does not stop a host session.
 
@@ -46,7 +46,7 @@ Features that read or run on this computer are not available in these projects: 
 
 Use Node.js 24 or newer on the host. Install and sign in to the providers you want under the same OS account that runs the host. The host uses that account's default provider credentials and searches its PATH and common per-user and system installation directories.
 
-From a checkout of this version of MCode on the host:
+From a checkout of [Monocode](https://github.com/hardbeat920/monocode) on the host, at the release with the same version number as MCode:
 
 ```sh
 npm ci
@@ -91,13 +91,11 @@ SSH-installed hosts have a launcher at `~/.monocode-host/bin/monocode-host`; use
 
 On Windows, the launcher is `%USERPROFILE%\.monocode-host\bin\monocode-host.cmd`. The scheduled task is named `MCode Host-<user SID>`; `service uninstall` unregisters it and stops the host. Normal cancellation and shutdown stop the provider's process tree. A plain manual `start` is detached, but use `service install` for SSH-hosted Windows sessions so Task Scheduler owns the process independently of the SSH login.
 
-## Release packaging
+## Host packages
 
-`npm run host:package` builds a self-contained package for the current Windows/Mac/Linux architecture. `npm run host:package -- --all` builds all six archives, using pinned official Node binaries and checksums. Archives contain the host bundle, runtime, launcher, and licenses. `host/package.mjs` pins the runtime version. Cross-packaging Windows on Unix requires `zip` and `unzip`; native Windows packaging uses PowerShell.
+MCode doesn't build host packages. SSH setup downloads `monocode-host-{darwin,linux}-{arm64,x64}.tar.gz` or `monocode-host-win32-{arm64,x64}.zip` and its `.sha256` file from the Monocode GitHub release with the same version number as MCode, checks it, then installs it under `~/.monocode-host/runtime`.
 
-The release workflow publishes `monocode-host-{darwin,linux}-{arm64,x64}.tar.gz`, `monocode-host-win32-{arm64,x64}.zip`, and their `.sha256` files alongside the desktop release. SSH setup downloads from the exact desktop version's GitHub release, then installs under `~/.monocode-host/runtime`.
-
-**Unreleased development builds:** automatic first-time installation and **Update Host** require host archives published for the desktop version. Release builds from v0.5.0 onward include the matching archives; an unreleased checkout may not have them. Until the matching release is available, use the manual development connection above. A missing archive produces an explicit error in Settings. No fallback to an arbitrary latest release or unverified download is used. Connecting does not automatically upgrade a running host. When an SSH host lacks Explorer or Changes, Settings → Connections offers **Update Host**. This downloads and verifies the matching package, restarts the host service, and reconnects using the existing device credential. The restart interrupts active agent turns; sessions and history remain on the host. URL connections must be updated on the host manually.
+If that release has no matching package, Settings shows an error. Setup never falls back to another release or an unverified download; use the manual connection above instead. Connecting does not automatically upgrade a running host. When an SSH host lacks Explorer or Changes, Settings → Connections offers **Update Host**. This downloads and verifies the matching package, restarts the host service, and reconnects using the existing device credential. The restart interrupts active agent turns; sessions and history remain on the host. URL connections must be updated on the host manually.
 
 ## Scope of this first version
 
@@ -109,17 +107,4 @@ The headless host runs the reused TypeScript adapters with a Node process backen
 
 ## Verify
 
-```sh
-npm run host:build
-npm run test:host
-npm run check:web
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test
-```
-
-Host tests use fake provider executables and temporary loopback servers. They do not contact paid models. They cover the Codex and Claude transports, Pi/OMP RPC, ACP providers, OpenCode HTTP and event streaming, cross-client reattachment, duplicate sends, approval races, interruption recovery, device revocation, path checks, and detached host lifecycle. On Node 26, use `NODE_OPTIONS=--no-experimental-webstorage npm run check:web` to avoid its experimental global storage interfering with the existing happy-dom tests.
-
-For the real OpenSSH transport and native askpass smoke test on Linux/macOS, build with `npm run host:package` and `cargo build --bin monocode`, then run `python3 scripts/test-remote-ssh.py`. It uses a disposable loopback sshd, temporary keys and known-hosts file, and an isolated packaged host. It leaves personal SSH configuration, provider credentials, and OS services untouched.
-
-Host CI runs on Windows, macOS, and Linux. Windows-specific tests cover ACL inheritance, Task Scheduler definitions, bootstrap parsing/installation, and provider child-process cleanup. They use temporary data and mocked task registration so normal test runs do not install or replace a real user's background task. Full SSH-to-Task-Scheduler setup must also be validated on a signed-in Windows host before a supported release.
+`npm run native:check` tests MCode's side: the SSH setup, the connection store and the remote client. The host's own tests, its CI and the OpenSSH smoke test are in the Monocode repository.

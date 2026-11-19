@@ -132,7 +132,7 @@ The program file (`monocode-gpui`), the code folders and the data folders keep t
 - [Remote sessions, experimental](docs/remote-access.md)
 - [Changelog](CHANGELOG.md)
 
-The mobile companion app is a separate Expo project in [`mobile/`](mobile/README.md). The `host/` folder holds the service that runs [remote sessions](docs/remote-access.md) on another machine. Both come from Monocode.
+The mobile companion app, from Monocode, is a separate Expo project in [`mobile/`](mobile/README.md).
 
 ## Contributing
 

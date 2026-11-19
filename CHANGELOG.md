@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Claude Code CLI tab follows `/clear` and `/resume`, on Windows too.
 - The Claude panels no longer keep the memory they read a transcript into.
 
+### Removed
+
+- The `host/` folder, the source of the remote-session host. **Add machine** still works: it installs Monocode's published host package. To change the host, use the Monocode repository.
+
 ## Monocode history
 
 ## Monocode, unreleased when MCode was forked

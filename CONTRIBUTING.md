@@ -21,7 +21,8 @@ Type `r` then Enter in that terminal to rebuild and restart.
 - `crates/monocode-core/` holds the agent providers, sessions, storage and Git code. It has no UI.
 - `crates/monocode-gpui/` is the desktop app, built with GPUI. It has its own Cargo workspace and lockfile.
 - `vendor/gpui-pre*/` is the vendored GPUI framework, with the changes listed in [NOTICE](NOTICE).
-- `mobile/` is the mobile companion app, and `host/` is the service that runs [remote sessions](docs/remote-access.md).
+- `mobile/` is the mobile companion app.
+- `src/` is TypeScript from Monocode's old React app. The app doesn't run it, but the editor and Settings arcade generators in `scripts/` build from it.
 - `docs/native/` has the [native guide](docs/native/README.md) and its [architecture notes](docs/native/migration.md).
 
 ## Before you push
