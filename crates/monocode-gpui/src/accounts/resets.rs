@@ -92,7 +92,8 @@ impl Accounts {
         cx: &mut Context<Self>,
     ) {
         if key.kind != Kind::Codex
-            || (key.profile.id != accounts::DEFAULT && !self.book.exists(key.kind, &key.profile.id))
+            || (key.profile.id != monocode_core::session::profile::DEFAULT
+                && !self.book.exists(key.kind, &key.profile.id))
             || self.reset_actions.get(&key).is_some_and(|a| {
                 a.applying()
                     || (a.row.as_deref() == Some(row)
@@ -259,7 +260,7 @@ mod tests {
                     "unlisted:0",
                     move |profile, credit| {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        assert_eq!(profile.id, accounts::DEFAULT);
+                        assert_eq!(profile.id, monocode_core::session::profile::DEFAULT);
                         assert!(credit.is_none());
                         (Ok("reset".into()), Ok(snapshot(1)))
                     },

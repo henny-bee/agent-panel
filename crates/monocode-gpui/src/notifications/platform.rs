@@ -1,6 +1,8 @@
 //! OS bridge. Call initialization and Dock updates on the UI thread. All other
 //! results are channels so authorization/dispatch never block the UI thread.
 
+#[cfg(target_os = "macos")]
+mod implementation;
 use std::sync::mpsc::{self, Receiver};
 
 use super::delivery::{Permission, Target};
@@ -13,10 +15,6 @@ pub struct Notification {
     pub body: String,
     pub sound: bool,
 }
-
-#[cfg(target_os = "macos")]
-#[path = "platform_macos.rs"]
-mod implementation;
 
 #[cfg(target_os = "macos")]
 pub use implementation::*;

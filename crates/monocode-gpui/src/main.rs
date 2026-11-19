@@ -4,107 +4,26 @@
 )]
 
 mod accounts;
-mod activity;
-mod app_log;
-mod app_menu;
-mod arcade;
-mod assets;
+mod app;
 mod automations;
-mod changes;
-mod claude_activity;
-mod claude_panels;
-mod composer_completion;
-mod composer_motion;
-mod composer_runner;
-mod context_meter;
-mod conversation;
-#[cfg(debug_assertions)]
-mod dev_reload;
-mod diff_view;
-mod editor_analysis;
-mod editor_scrollbar;
-mod editor_syntax;
-mod explorer;
-mod file_editor;
-mod file_icons;
-mod fixtures;
-mod fonts;
-mod frame_log;
-mod fs_watch;
-mod git_cache;
-mod git_graph;
-mod git_picker;
-mod git_status;
-mod gpu_trim;
-#[cfg(target_os = "macos")]
-mod hang_watchdog;
-mod history;
-mod image_lightbox;
-mod image_memory;
+mod chat;
+mod editor;
+mod footer;
+mod git;
 mod inbox;
-mod ink_field;
-mod input;
-#[cfg(unix)]
-mod instance;
-mod markdown;
-mod markdown_model;
-#[cfg(target_os = "macos")]
-mod memory_log;
-#[cfg(all(test, target_os = "macos"))]
-mod metal_tests;
 mod mobile;
-mod modal;
 mod monos;
 mod notes;
 mod notifications;
-mod pane_layout;
-mod pane_motion;
-mod particle_text;
-mod phase_tile;
-mod pickers;
-mod popover;
-mod project_background;
-mod project_search;
-mod project_settings;
-mod project_tabs;
-mod project_theme;
-mod pulse;
-mod questions;
-mod quick_composer;
-mod quick_open;
-mod reflow_motion;
-mod resource_pressure;
-mod response_actions;
-mod reveal;
-mod review;
-mod right_panel;
+mod project;
 mod runtime;
 mod search;
-mod send_morph;
-mod session_mark;
-mod session_review;
 mod settings;
-mod shell;
-mod sound;
-mod syntax;
-mod tab_label;
-mod tab_motion;
-mod tab_tile;
 mod terminal;
-mod theme;
-#[cfg(target_os = "macos")]
-mod traffic_lights;
-mod transcript;
-mod usage_footer;
-mod visuals;
-#[cfg(test)]
-mod wheel_glide_tests;
-mod window_state;
-mod workspace;
-mod worktree_switcher;
+mod ui;
 
 use gpui::{App, KeyBinding, TitlebarOptions, WindowOptions, actions, point, prelude::*, px, size};
-use monocode_core::{store::Store, transcript::Transcript};
+use monocode_core::{session::transcript::Transcript, store::Store};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -123,7 +42,7 @@ fn quit(cx: &mut App) {
     }
     let shutdown = cx
         .background_executor()
-        .spawn(async { monocode_core::process::shutdown_all() });
+        .spawn(async { monocode_core::sys::process::shutdown_all() });
     cx.spawn(async move |cx| {
         shutdown.await;
         cx.update(|cx| cx.quit());
@@ -135,7 +54,7 @@ fn quit(cx: &mut App) {
 fn restart(cx: &mut App) {
     let shutdown = cx
         .background_executor()
-        .spawn(async { monocode_core::process::shutdown_all() });
+        .spawn(async { monocode_core::sys::process::shutdown_all() });
     cx.spawn(async move |cx| {
         shutdown.await;
         cx.update(|cx| cx.restart());
@@ -182,7 +101,7 @@ fn plist_data_mode(plist: &str) -> Option<bool> {
     }
 }
 fn main() {
-    if let Some(code) = monocode_core::remote::ssh_askpass::maybe_run() {
+    if let Some(code) = monocode_core::integrations::remote::ssh_askpass::maybe_run() {
         std::process::exit(code);
     }
     let cli_args: Vec<_> = std::env::args().skip(1).collect();
@@ -194,7 +113,7 @@ fn main() {
         return;
     }
     if cli_args.first().is_some_and(|a| a == "visual-mcp") {
-        if let Err(error) = monocode_core::visual_bridge::mcp_stdio() {
+        if let Err(error) = monocode_core::provider::visual_bridge::mcp_stdio() {
             eprintln!("{error}");
             std::process::exit(1);
         }
@@ -208,7 +127,7 @@ fn main() {
         return;
     }
     if cli_args.first().is_some_and(|a| a == "visual") {
-        match monocode_core::visual_bridge::client(&cli_args[1..]) {
+        match monocode_core::provider::visual_bridge::client(&cli_args[1..]) {
             Ok(value) => {
                 println!("{value}");
                 if value.get("ok") == Some(&serde_json::Value::Bool(false)) {
@@ -312,7 +231,10 @@ fn main() {
     #[cfg(unix)]
     let socket = database.with_file_name("monocode-native.sock");
     #[cfg(unix)]
-    if !check_data && !(fixture || chat_fixture || visual_fixture) && instance::hand_off(&socket) {
+    if !check_data
+        && !(fixture || chat_fixture || visual_fixture)
+        && app::instance::hand_off(&socket)
+    {
         return;
     }
     let mut db = if check_data {
@@ -338,7 +260,7 @@ fn main() {
         }
         return;
     }
-    monocode_core::checkpoint::init(
+    monocode_core::vcs::checkpoint::init(
         database
             .parent()
             .unwrap_or(std::path::Path::new("."))
@@ -393,19 +315,21 @@ fn main() {
     if chat_fixture {
         let s = db.create("codex", &cwd).expect("create chat fixture");
         db.title(s.id, "Native chat · Markdown and tools").unwrap();
-        db.write_rows(s.id, 0, &fixtures::chat().rows).unwrap();
+        db.write_rows(s.id, 0, &chat::fixtures::chat().rows)
+            .unwrap();
     }
     if visual_fixture {
         let s = db.create("codex", &cwd).expect("create visual fixture");
         db.title(s.id, "Native visuals · Controls, charts and 3D")
             .unwrap();
-        db.write_rows(s.id, 0, &fixtures::visuals().rows).unwrap();
+        db.write_rows(s.id, 0, &chat::fixtures::visuals().rows)
+            .unwrap();
         let s = db
             .create("claude", &cwd)
             .expect("create visual story fixture");
         db.title(s.id, "Native visuals · Charts inside an answer")
             .unwrap();
-        db.write_rows(s.id, 0, &fixtures::visual_story().rows)
+        db.write_rows(s.id, 0, &chat::fixtures::visual_story().rows)
             .unwrap();
     }
     let mut sessions = db.sessions().expect("read native sessions");
@@ -418,39 +342,39 @@ fn main() {
         .iter()
         .map(|s| (s.id, s.cwd.clone()))
         .collect::<Vec<_>>();
-    let workspace = workspace::Workspace::restore(saved.as_deref(), &metadata, &cwd);
+    let workspace = app::workspace::Workspace::restore(saved.as_deref(), &metadata, &cwd);
     let mut projects = workspace.projects;
     if !projects.contains(&workspace.project) {
         projects.push(workspace.project);
     }
     let sidebar_metadata = db.session_sidebar_metadata(&projects);
     let db = Arc::new(Mutex::new(db));
-    app_log::init();
+    app::diagnostics::app_log::init();
     let platform = gpui_platform::current_platform(false);
-    let title_raster = particle_text::GlyphRaster(platform.text_system());
+    let title_raster = ui::motion::particle_text::GlyphRaster(platform.text_system());
     gpui::Application::with_platform(platform)
-        .with_assets(assets::Assets)
+        .with_assets(ui::assets::Assets)
         .run(move |cx: &mut App| {
             #[cfg(debug_assertions)]
-            dev_reload::install(cx);
+            app::dev_reload::install(cx);
             cx.set_global(title_raster);
-            image_memory::init(cx);
+            ui::image_memory::init(cx);
             #[cfg(target_os = "macos")]
-            memory_log::start(cx);
-            frame_log::start(cx);
-            gpu_trim::start(cx);
+            app::diagnostics::memory_log::start(cx);
+            app::diagnostics::frame_log::start(cx);
+            app::diagnostics::gpu_trim::start(cx);
             #[cfg(target_os = "macos")]
-            hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
-            input::bind(cx);
-            image_lightbox::bind(cx);
-            composer_completion::bind(cx);
-            file_editor::bind(cx);
-            popover::bind(cx);
-            cx.set_prompt_builder(modal::prompt_builder);
-            explorer::bind(cx);
-            history::bind(cx);
-            diff_view::bind(cx);
-            fonts::init(cx);
+            app::diagnostics::hang_watchdog::start(database.with_file_name("gpui-hangs"), cx);
+            ui::input::bind(cx);
+            ui::image_lightbox::bind(cx);
+            chat::composer::completion::bind(cx);
+            editor::file_editor::bind(cx);
+            ui::popover::bind(cx);
+            cx.set_prompt_builder(ui::modal::prompt_builder);
+            project::explorer::bind(cx);
+            git::history::bind(cx);
+            editor::diff_view::bind(cx);
+            ui::fonts::init(cx);
             terminal::bind(cx);
             let modifier = if cfg!(target_os = "macos") {
                 "cmd"
@@ -458,9 +382,9 @@ fn main() {
                 "ctrl"
             };
             cx.bind_keys([KeyBinding::new(&format!("{modifier}-q"), Quit, None)]);
-            shell::bind_keys(cx);
-            app_menu::bind(cx);
-            usage_footer::bind(cx);
+            app::shell::commands::bind_keys(cx);
+            app::app_menu::bind(cx);
+            footer::usage::bind(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     quit(cx)
@@ -476,7 +400,7 @@ fn main() {
             open_shell_window(bounds, decorations, cx, |window, cx| {
                 // Install the menu one frame later, after the first frame presents.
                 window.on_next_frame(|window, _| {
-                    window.on_next_frame(|_, cx| app_menu::ready(cx));
+                    window.on_next_frame(|_, cx| app::app_menu::ready(cx));
                 });
                 // Off the launch path: it lists every conversation folder.
                 let cleanup = db.clone();
@@ -494,12 +418,19 @@ fn main() {
                         .detach();
                 });
                 cx.new(|cx| {
-                    shell::Shell::new_with_metadata(db, sessions, cwd, saved, sidebar_metadata, cx)
+                    app::shell::Shell::new_with_metadata(
+                        db,
+                        sessions,
+                        cwd,
+                        saved,
+                        sidebar_metadata,
+                        cx,
+                    )
                 })
             })
             .expect("open GPUI window");
             #[cfg(unix)]
-            if let Some(requests) = instance::listen(&socket) {
+            if let Some(requests) = app::instance::listen(&socket) {
                 cx.spawn(async move |cx| {
                     while requests.recv().await.is_ok() {
                         let db = windows_db.clone();
@@ -528,13 +459,13 @@ fn open_another_window(db: Arc<Mutex<Store>>, cx: &mut App) {
         .map(|s| (s.id, s.cwd.clone()))
         .collect::<Vec<_>>();
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let workspace = workspace::Workspace::restore(saved.as_deref(), &metadata, &home);
+    let workspace = app::workspace::Workspace::restore(saved.as_deref(), &metadata, &home);
     let bounds = workspace.window.bounds(cx);
     let decorations = workspace
         .preferences
         .wayland_decorations(cx.compositor_name());
     if let Err(error) = open_shell_window(bounds, decorations, cx, |_, cx| {
-        cx.new(|cx| shell::Shell::new(db, sessions, workspace.project, saved, cx))
+        cx.new(|cx| app::shell::Shell::new(db, sessions, workspace.project, saved, cx))
     }) {
         eprintln!("Cannot open another window: {error}");
     }
@@ -544,7 +475,7 @@ fn open_shell_window(
     bounds: gpui::WindowBounds,
     decorations: Option<gpui::WindowDecorations>,
     cx: &mut App,
-    build: impl FnOnce(&mut gpui::Window, &mut App) -> gpui::Entity<shell::Shell>,
+    build: impl FnOnce(&mut gpui::Window, &mut App) -> gpui::Entity<app::shell::Shell>,
 ) -> Result<(), String> {
     cx.open_window(
         WindowOptions {
@@ -572,7 +503,7 @@ fn open_shell_window(
                         image::imageops::FilterType::Nearest,
                     ))
                 }),
-            window_background: theme::window_backdrop(true),
+            window_background: ui::theme::window_backdrop(true),
             // GPUI owns the custom chrome. AppKit must not reinterpret
             // its controls as native titlebar double-click/drag gestures.
             app_owns_titlebar_drag: cfg!(target_os = "macos"),
@@ -584,7 +515,7 @@ fn open_shell_window(
                 traffic_light_position: if cfg!(target_os = "macos") {
                     // Original macOS chrome: 12 pt left inset, with
                     // 14 pt native buttons centered in the 40 pt bar.
-                    Some(point(px(12.), px((theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
+                    Some(point(px(12.), px((ui::theme::TITLE_BAR_HEIGHT - 14.) / 2.)))
                 } else {
                     None
                 },
@@ -596,11 +527,11 @@ fn open_shell_window(
             shell.update(cx, |shell, cx| shell.focus_active(window, cx));
             #[cfg(target_os = "macos")]
             {
-                traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT);
+                ui::traffic_lights::pin(window, ui::theme::TITLE_BAR_HEIGHT);
                 // AppKit rebuilds the buttons on some titlebar changes.
                 shell.update(cx, |_, cx| {
                     cx.observe_window_activation(window, |_, window, _| {
-                        traffic_lights::pin(window, theme::TITLE_BAR_HEIGHT)
+                        ui::traffic_lights::pin(window, ui::theme::TITLE_BAR_HEIGHT)
                     })
                     .detach();
                 });
@@ -616,10 +547,10 @@ fn open_shell_window(
 #[cfg(test)]
 mod native_tests {
     use super::*;
-    use crate::{input, transcript::TranscriptView};
+    use crate::{chat::transcript::TranscriptView, ui::input};
     use gpui::{Bounds, Context, Entity, Render, StyleRefinement, Window, WindowBounds, div};
     use gpui::{EntityInputHandler, ListOffset, TestAppContext, point};
-    use monocode_core::transcript::Row;
+    use monocode_core::session::transcript::Row;
     struct Surface {
         transcript: Entity<TranscriptView>,
         input: Entity<input::Input>,

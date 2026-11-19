@@ -1,10 +1,9 @@
 use crate::{
-    settings::{
-        SettingsView,
-        management::Target,
+    settings::{SettingsView, management::Target},
+    ui::{
+        theme::*,
         widgets::{note, secondary_button},
     },
-    theme::*,
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 impl SettingsView {
@@ -314,7 +313,7 @@ impl SettingsView {
         let expected = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { monocode_core::mcp::claude_health(&cwd) });
+            .spawn(async move { monocode_core::provider::mcp::claude_health(&cwd) });
         self.mcp_health = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -394,9 +393,9 @@ impl SettingsView {
         let expected = cwd.clone();
         let work = cx.background_executor().spawn(async move {
             if remove {
-                monocode_core::mcp::remove(&cwd, &server.name, &server.scope)
+                monocode_core::provider::mcp::remove(&cwd, &server.name, &server.scope)
             } else {
-                monocode_core::mcp::login(&cwd, &server.provider, &server.name)
+                monocode_core::provider::mcp::login(&cwd, &server.provider, &server.name)
             }
         });
         cx.spawn(async move |this, cx| {

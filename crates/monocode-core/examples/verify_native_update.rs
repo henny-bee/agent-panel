@@ -1,5 +1,5 @@
 //! Offline publication check with the actual client verifier and embedded key.
-use monocode_core::app_update::{verify_feed, Config};
+use monocode_core::integrations::app_update::{verify_feed, Config};
 use std::{env, fs, path::PathBuf};
 
 fn verify() -> Result<(), String> {

@@ -1,7 +1,7 @@
 //! Bounded, cancellable project listing shared by mentions and Quick Open.
 //! Ported from the retired Tauri filesystem service.
 use super::Ignore;
-use crate::scm::{expand_home, git_cmd, path_to_js, shell::dirs_home};
+use crate::vcs::git::scm::{expand_home, launch_env::dirs_home, path_to_js, process::git_cmd};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Read,

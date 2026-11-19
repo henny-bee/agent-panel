@@ -1,7 +1,10 @@
 //! Capability-checked app actions used by Mono provider subprocesses.
 use super::*;
-use monocode_core::mono::{Document, Launch, bridge::Call, files, memory};
-use monocode_core::{app_access as app, session_groups::Groups, time::now_ms};
+use monocode_core::{
+    mono::{bridge::Call, files, memory},
+    session::mono_model::{Document, Launch},
+};
+use monocode_core::{project::app_access as app, session::groups::Groups, sys::time::now_ms};
 use serde_json::{Value, json};
 use std::path::Path;
 enum Effect {
@@ -12,7 +15,7 @@ enum Effect {
         Box<Settings>,
         String,
         bool,
-        Option<(i64, crate::pane_layout::Edge)>,
+        Option<(i64, crate::runtime::pane_layout::Edge)>,
     ),
     Groups(String, Groups),
 }
@@ -360,10 +363,13 @@ impl Monos {
                             || input.get("modelSettings").is_some()
                             || input.get("effort").is_some()
                         {
-                            monocode_core::catalog::models_for(kind, &settings.account)?
+                            monocode_core::provider::catalog::models_for(kind, &settings.account)?
                         } else {
-                            monocode_core::catalog::cached_models_for(kind, &settings.account)
-                                .unwrap_or_default()
+                            monocode_core::provider::catalog::cached_models_for(
+                                kind,
+                                &settings.account,
+                            )
+                            .unwrap_or_default()
                         };
                         let mut settings = app::launch_settings(
                             &input,
@@ -736,8 +742,8 @@ if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if i
 if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
 if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
                         "notes.list"|"notes.read"|"notes.write"=>app::notes_action(&*locked(&store)?,caller,&request,&action,&input,&projects)?,
-                        "worktrees.list"=>json!(monocode_core::git::snapshot(Path::new(&project))?.worktrees.iter().map(|w|json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main})).collect::<Vec<_>>()),
-                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=monocode_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
+                        "worktrees.list"=>json!(monocode_core::vcs::git::snapshot(Path::new(&project))?.worktrees.iter().map(|w|json!({"path":w.path,"branch":w.branch,"head":w.head,"main":w.main})).collect::<Vec<_>>()),
+                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=monocode_core::vcs::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
                         _=>unreachable!(),
                     };Ok((value,Effect::None))
                 },cx);
@@ -853,7 +859,11 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
                     .map(|(id, title)| {
                         let report = locked(&store)
                             .and_then(|db| db.load(id))
-                            .map(|t| monocode_core::response::completion_report(id, &t.rows, 12000))
+                            .map(|t| {
+                                monocode_core::session::response::completion_report(
+                                    id, &t.rows, 12000,
+                                )
+                            })
                             .unwrap_or_else(|_| "Session was removed".into());
                         format!("Session {id}: {title}\n{report}")
                     })

@@ -1,5 +1,5 @@
 use super::*;
-use crate::popover::{MenuAction, MenuItem};
+use crate::ui::popover::{MenuAction, MenuItem};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -15,8 +15,8 @@ pub(super) struct Filters {
 impl Filters {
     pub(super) fn matches(
         &self,
-        launch: &mono::Launch,
-        view: Option<&crate::shell::monos::MonoSession>,
+        launch: &monocode_core::session::mono_model::Launch,
+        view: Option<&crate::monos::MonoSession>,
     ) -> bool {
         if self.show_unavailable {
             return view.is_none();
@@ -24,7 +24,7 @@ impl Filters {
         let Some(view) = view else {
             return false;
         };
-        let now = monocode_core::time::now_ms();
+        let now = monocode_core::sys::time::now_ms();
         let since = match self.time.as_str() {
             "today" => chrono::Local::now()
                 .date_naive()
@@ -134,7 +134,7 @@ impl Monos {
             menu,
             anchor: Anchor::Slot(self.session_filter_anchor.clone()),
             width: 228.,
-            align: crate::popover::Align::Start,
+            align: crate::ui::popover::Align::Start,
             _events: vec![events],
         });
         cx.notify();

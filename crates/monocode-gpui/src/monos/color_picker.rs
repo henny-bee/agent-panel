@@ -292,7 +292,7 @@ impl gpui::Render for ColorPicker {
                             .border_1()
                             .border_color(content(0.1))
                             .bg(content(0.05))
-                            .font_family(crate::fonts::mono())
+                            .font_family(crate::ui::fonts::mono())
                             .child(self.hex.clone()),
                     ),
             )

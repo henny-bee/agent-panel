@@ -1,9 +1,9 @@
 use crate::{
-    settings::{
-        SettingsEvent, SettingsView,
+    settings::{SettingsEvent, SettingsView},
+    ui::{
+        theme::*,
         widgets::{note, secondary_button},
     },
-    theme::*,
 };
 use gpui::{AnyElement, Context, Role, SharedString, div, prelude::*, px};
 impl SettingsView {

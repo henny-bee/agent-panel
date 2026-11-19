@@ -1,8 +1,7 @@
 //! Flowing Inbox prose. The detail page owns scrolling; this is never a chat.
 use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
-    theme::*,
+    chat::markdown::{self, MarkdownRow, Part, Tone, model},
+    ui::theme::*,
 };
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
@@ -73,7 +72,7 @@ impl InboxDocument {
 }
 
 fn append_markdown(rows: &mut Vec<Row>, text: &str, cwd: &std::path::Path) {
-    for block in &markdown_model::parse_full(text).blocks {
+    for block in &model::parse_full(text).blocks {
         for mut row in markdown::rows(&block.block) {
             markdown::resolve_file_links(&mut row, &cwd.to_string_lossy());
             // Transcript code is chunked for virtualization. A document displays
@@ -119,14 +118,14 @@ fn attachment(
     let url = url.to_owned();
     let view = window.current_view();
     let key = gpui::hash(&("inbox", &url));
-    crate::image_memory::images(cx).update(cx, |cache, cx| {
+    crate::ui::image_memory::images(cx).update(cx, |cache, cx| {
         cache.request(
             key,
             view,
             move |cx| {
                 let renderer = cx.svg_renderer();
                 async move {
-                    let bytes = monocode_core::inbox::media_png(&url)
+                    let bytes = monocode_core::integrations::inbox::media_png(&url)
                         .map_err(|error| ImageCacheError::Asset(error.into()))?;
                     Image::from_bytes(ImageFormat::Png, bytes)
                         .to_image_data(renderer)
@@ -176,7 +175,7 @@ impl InboxDocument {
                         .into_any_element(),
                     Some(Err(_)) => div()
                         .text_size(px(14.))
-                        .text_color(crate::theme::accent_color())
+                        .text_color(crate::ui::theme::accent_color())
                         .child(label.clone())
                         .into_any_element(),
                     None => div()

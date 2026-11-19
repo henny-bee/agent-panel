@@ -29,7 +29,7 @@ impl EditSnapshot {
 
 pub(super) fn codex_turn_start(
     rows: &[Row],
-    settings: &crate::agent::Settings,
+    settings: &crate::session::agent::Settings,
     id: &str,
 ) -> Option<usize> {
     let response = settings
@@ -137,7 +137,7 @@ impl Store {
         let prompt: String = rows[latest..end].iter().map(|r| r.text.as_str()).collect();
         let attachments = rows
             .get(end)
-            .map(crate::transcript::attachments::paths)
+            .map(crate::session::transcript::attachments::paths)
             .transpose()?
             .unwrap_or_default();
         if attachments.is_empty() && untracked_attachment_tail(&prompt) {
@@ -218,7 +218,7 @@ impl Store {
         }
         let start = i64::try_from(edit.start)
             .map_err(|_| "Conversation row index exceeds SQLite's integer range".to_owned())?;
-        let updated_at = crate::time::now_ms().min(i64::MAX as u64) as i64;
+        let updated_at = crate::sys::time::now_ms().min(i64::MAX as u64) as i64;
         let tx = self
             .conn
             .unchecked_transaction()
@@ -264,10 +264,10 @@ mod tests {
             transcript.append(text);
         }
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
-        let mut settings = crate::agent::Settings::default();
+        let mut settings = crate::session::agent::Settings::default();
         settings.turns.insert(
             3,
-            crate::agent::TurnInfo {
+            crate::session::agent::TurnInfo {
                 provider_turn_id: Some("turn".into()),
                 ..Default::default()
             },
@@ -327,7 +327,7 @@ mod tests {
         let mut settings = store.agent_settings(id).unwrap().unwrap();
         settings.turns.insert(
             5,
-            crate::agent::TurnInfo {
+            crate::session::agent::TurnInfo {
                 provider_turn_id: Some("turn".into()),
                 ..Default::default()
             },

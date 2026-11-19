@@ -20,14 +20,14 @@ pub(crate) fn document_cards(block: &Value) -> Vec<Value> {
 }
 
 /// A visual block's document, keyed by its visual id so republishing replaces it.
-pub(crate) fn visual_document(block: &Value) -> Option<super::Document> {
+pub(crate) fn visual_document(block: &Value) -> Option<crate::session::mono_model::Document> {
     if block["role"] != "visual" {
         return None;
     }
-    let visual: crate::visual::VisualDocument =
+    let visual: crate::session::visual::VisualDocument =
         serde_json::from_str(block["text"].as_str()?).ok()?;
     let at = block["sentAt"].as_u64().unwrap_or_default();
-    Some(super::Document {
+    Some(crate::session::mono_model::Document {
         id: format!("visual:{}", visual.id),
         kind: "visual".into(),
         title: visual.title.clone(),
@@ -241,7 +241,7 @@ pub(crate) fn block_launches(blocks: &[Value]) -> Vec<Vec<Value>> {
     result
 }
 
-impl super::Mono {
+impl crate::session::mono_model::Mono {
     /// Refresh references without discarding native-created documents or launch
     /// monitoring state. Removed desktop references disappear on the next read.
     pub fn refresh_work(&mut self, store: &crate::store::Store) -> Result<bool, String> {
@@ -255,8 +255,8 @@ impl super::Mono {
     }
     pub fn apply_work(
         &mut self,
-        documents: Vec<super::Document>,
-        mut launches: Vec<super::Launch>,
+        documents: Vec<crate::session::mono_model::Document>,
+        mut launches: Vec<crate::session::mono_model::Launch>,
     ) -> Result<bool, String> {
         let before = serde_json::to_string(&(self.documents.clone(), self.launches.clone()))
             .map_err(|e| e.to_string())?;
@@ -358,8 +358,8 @@ mod tests {
     }
     #[test]
     fn reconcile_work_retains_native_documents_monitoring_and_desktop_removals() {
-        let mut mono = super::super::Mono::default();
-        let document = super::super::Document {
+        let mut mono = crate::session::mono_model::Mono::default();
+        let document = crate::session::mono_model::Document {
             id: "desktop".into(),
             kind: "html".into(),
             title: "Visual".into(),

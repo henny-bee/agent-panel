@@ -3,9 +3,11 @@
 //! desktop conversations; no remote row is inserted into the local session table.
 use super::{shared, Session, Store};
 use crate::{
-    agent::{Settings, TurnInfo},
-    remote::{Connections, Machine},
-    transcript::Transcript,
+    integrations::remote::{Connections, Machine},
+    session::{
+        agent::{Settings, TurnInfo},
+        transcript::Transcript,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -68,8 +70,9 @@ impl RemoteSession {
 fn host_settings(project: &RemoteProject, host: &Value) -> Settings {
     let mut settings = Settings::default();
     settings.model = host["model"].as_str().map(str::to_owned);
-    settings.access =
-        crate::agent::AccessMode::from_id(host["runtimeMode"].as_str().unwrap_or("supervised"));
+    settings.access = crate::session::agent::AccessMode::from_id(
+        host["runtimeMode"].as_str().unwrap_or("supervised"),
+    );
     settings.model_settings = host
         .get("modelSettings")
         .cloned()
@@ -90,7 +93,10 @@ fn host_settings(project: &RemoteProject, host: &Value) -> Settings {
         .get("thinking")
         .and_then(|value| value.parse::<bool>().ok());
     if let Some(cwd) = host["cwd"].as_str().filter(|cwd| *cwd != project.cwd) {
-        settings.worktree_cwd = Some(crate::remote::remote_path(&project.environment_id, cwd));
+        settings.worktree_cwd = Some(crate::files::remote::remote_path(
+            &project.environment_id,
+            cwd,
+        ));
     }
     settings
 }
@@ -137,7 +143,7 @@ impl Store {
             .as_str()
             .ok_or("Host project has no identity")?;
         let remote = RemoteProject {
-            key: crate::remote::remote_path(
+            key: crate::files::remote::remote_path(
                 environment_id,
                 cwd.replace('\\', "/").trim_end_matches('/'),
             ),
@@ -262,7 +268,7 @@ impl Store {
             .into_values()
             .find(|project| {
                 project.key.trim_end_matches('/') == cwd.trim_end_matches('/')
-                    || crate::remote::remote_path(
+                    || crate::files::remote::remote_path(
                         &project.environment_id,
                         project.cwd.replace('\\', "/").trim_end_matches('/'),
                     )
@@ -278,7 +284,7 @@ impl Store {
             cwd: project.key.clone(),
             provider_id: None,
             has_messages: false,
-            updated_at: crate::time::now_ms(),
+            updated_at: crate::sys::time::now_ms(),
             archived: false,
             pinned: false,
             work_item: None,
@@ -366,10 +372,12 @@ impl Store {
         let imported = host_settings(project, host);
         let full_snapshot = value.get("session").is_some_and(Value::is_object);
         let configuration = if full_snapshot {
-            Some(crate::remote::protocol::settings_configuration(
-                &summary.provider,
-                &imported,
-            ))
+            Some(
+                crate::integrations::remote::protocol::settings_configuration(
+                    &summary.provider,
+                    &imported,
+                ),
+            )
         } else {
             prior
                 .as_ref()
@@ -383,8 +391,10 @@ impl Store {
                 let pending = prior
                     .as_ref()
                     .is_some_and(|remote| !remote.outbox.is_empty() || !remote.uploads.is_empty());
-                let local =
-                    crate::remote::protocol::settings_configuration(&summary.provider, &settings);
+                let local = crate::integrations::remote::protocol::settings_configuration(
+                    &summary.provider,
+                    &settings,
+                );
                 let unchanged = prior
                     .as_ref()
                     .and_then(|remote| remote.configuration.as_ref())
@@ -451,7 +461,7 @@ impl Store {
             Transcript {
                 rows: shared::blocks::project(&blocks)?,
             },
-            shared::project_turns(&blocks)?,
+            shared::turns::project_turns(&blocks)?,
         ))
     }
     pub fn patch_remote_session(&self, id: i64, patch: Value) -> Result<(), String> {
@@ -459,7 +469,7 @@ impl Store {
             .remote_session(id)?
             .ok_or("Remote session no longer exists")?;
         if let Some(session_id) = &remote.session_id {
-            let client = crate::remote::default_connections()?;
+            let client = crate::integrations::remote::default_connections()?;
             let machine = remote.machine(&client)?;
             let mut params = patch.clone();
             params["sessionId"] = json!(session_id);
@@ -485,7 +495,7 @@ impl Store {
             .remote_session(id)?
             .ok_or("Remote session no longer exists")?;
         if let Some(session_id) = &remote.session_id {
-            let client = crate::remote::default_connections()?;
+            let client = crate::integrations::remote::default_connections()?;
             let machine = remote.machine(&client)?;
             client.request(
                 &machine.id,
@@ -606,7 +616,7 @@ mod tests {
             settings.worktree_cwd.as_deref(),
             Some("remote://one/host/repo/worktree")
         );
-        assert_eq!(settings.access, crate::agent::AccessMode::Auto);
+        assert_eq!(settings.access, crate::session::agent::AccessMode::Auto);
         assert_eq!(settings.model_settings["reasoningEffort"], "high");
     }
 
@@ -720,7 +730,7 @@ mod configuration_tests {
         assert!(settings.fast);
         assert_eq!(settings.effort.as_deref(), Some("max"));
         assert_eq!(settings.thinking, Some(true));
-        let wire = crate::remote::protocol::wire_model_settings("claude", &settings);
+        let wire = crate::integrations::remote::protocol::wire_model_settings("claude", &settings);
         assert_eq!(wire["fast"], "true");
         assert_eq!(wire["effort"], "max");
         assert_eq!(wire["context"], "1m");
@@ -738,7 +748,10 @@ mod configuration_tests {
         let settings = store.agent_settings(summary.id).unwrap().unwrap();
         assert_eq!(settings.model.as_deref(), Some("claude:opus"));
         assert!(settings.fast);
-        assert_eq!(settings.access, crate::agent::AccessMode::FullAccess);
+        assert_eq!(
+            settings.access,
+            crate::session::agent::AccessMode::FullAccess
+        );
         assert!(settings.revision > revision);
         // Summary listings omit modelSettings and must not erase the baseline.
         let before = store
@@ -778,7 +791,7 @@ mod configuration_tests {
             store.agent_settings(summary.id).unwrap().unwrap().model,
             local.model
         );
-        let accepted = crate::remote::protocol::wire_model_settings("claude", &local);
+        let accepted = crate::integrations::remote::protocol::wire_model_settings("claude", &local);
         store
             .register_remote_summary(&project, &host("claude:local-choice", json!(accepted)))
             .unwrap();

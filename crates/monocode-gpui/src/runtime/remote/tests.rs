@@ -1,5 +1,5 @@
 use super::*;
-use monocode_core::remote::{Connections, Machine};
+use monocode_core::integrations::remote::{Connections, Machine};
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
@@ -491,7 +491,9 @@ fn ambiguous_legacy_requests_block_direct_send_and_retry_before_transport() {
     binding.rejected = Some(json!({"legacyRecovery":true,"error":"Recover the original request"}));
     binding.outbox = vec![json!({"type":"create","commandId":"original-create"})];
     journal(&store, &binding).unwrap();
-    let client = Arc::new(monocode_core::remote::Connections::new(&dir.0));
+    let client = Arc::new(monocode_core::integrations::remote::Connections::new(
+        &dir.0,
+    ));
     for action in ["send", "retry"] {
         let (tx, rx) = async_channel::unbounded();
         let (_controls_tx, controls) = std::sync::mpsc::channel();
@@ -534,7 +536,7 @@ fn host_context_and_latest_turn_metrics_use_actual_session_fields() {
     let (context, metrics) = accounting(&value);
     assert_eq!(
         context,
-        Some(monocode_core::context::Usage {
+        Some(monocode_core::session::context::Usage {
             used: 1200,
             window: Some(128000)
         })

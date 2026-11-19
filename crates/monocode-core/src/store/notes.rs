@@ -1,13 +1,13 @@
 //! Desktop-compatible note persistence, deliberately separate from session handles.
 use super::Store;
-use crate::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
+use crate::session::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Component, Path, PathBuf};
 const TITLE_MAX: usize = 200;
 const TAG_MAX: usize = 48;
 const TAGS_MAX: usize = 20;
 fn now_millis() -> i64 {
-    crate::time::now_ms().min(i64::MAX as u64) as i64
+    crate::sys::time::now_ms().min(i64::MAX as u64) as i64
 }
 pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -414,10 +414,10 @@ impl Store {
         self.upsert_note(&NoteUpsert {
             id: format!(
                 "note-{}-{:016x}",
-                crate::time::now_ms(),
+                crate::sys::time::now_ms(),
                 rand::random::<u64>()
             ),
-            source_cwd: cwd.filter(|cwd| crate::notes::is_project(cwd)),
+            source_cwd: cwd.filter(|cwd| crate::session::notes::is_project(cwd)),
             ..Default::default()
         })
     }
@@ -475,7 +475,7 @@ impl Store {
 
     /// Resolves @note/slug mentions in the same order as the desktop composer.
     pub fn apply_notes_to_turn(&self, text: &str) -> Result<String, String> {
-        let slugs = crate::notes::slugs_in_text(text);
+        let slugs = crate::session::notes::slugs_in_text(text);
         if slugs.is_empty() {
             return Ok(text.into());
         }
@@ -484,10 +484,13 @@ impl Store {
             .iter()
             .filter_map(|slug| notes.iter().find(|note| &note.slug == slug).cloned())
             .collect::<Vec<_>>();
-        Ok(crate::notes::inject_prompt(text, &picked))
+        Ok(crate::session::notes::inject_prompt(text, &picked))
     }
 
-    pub(super) fn save_response_note(&self, note: &crate::response::Note) -> Result<(), String> {
+    pub(super) fn save_response_note(
+        &self,
+        note: &crate::session::response::Note,
+    ) -> Result<(), String> {
         if note.body.len() > MAX_BODY {
             return Err("Content is too large".into());
         }
@@ -582,7 +585,7 @@ impl Store {
         let stem = if stem.is_empty() { "image" } else { &stem };
         let filename = format!(
             "{}-{:016x}-{stem}.{extension}",
-            crate::time::now_ms(),
+            crate::sys::time::now_ms(),
             rand::random::<u64>()
         );
         let root = self.data_dir().ok_or("Note image storage is unavailable")?;
@@ -744,7 +747,7 @@ mod tests {
         let prompt = "Use @note/beta and @note/alpha and @note/beta @note/missing";
         assert_eq!(
             store.apply_notes_to_turn(prompt).unwrap(),
-            crate::notes::inject_prompt(prompt, &[b, a])
+            crate::session::notes::inject_prompt(prompt, &[b, a])
         );
         assert_eq!(
             store.apply_notes_to_turn("@note/missing").unwrap(),
@@ -756,7 +759,7 @@ mod tests {
     fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
         let store = store();
         let session = store.create("codex", "/project").unwrap();
-        let mut response = crate::response::Note {
+        let mut response = crate::session::response::Note {
             id: 123,
             title: "Response".into(),
             body: "Saved response".into(),

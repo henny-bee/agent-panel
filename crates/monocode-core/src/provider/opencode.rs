@@ -12,7 +12,10 @@ enum Wire {
     Frame(Value),
     Ended(String),
     Admitted(Result<Option<String>, String>),
-    Steered(crate::follow_up::Message, Result<Option<String>, String>),
+    Steered(
+        crate::session::follow_up::Message,
+        Result<Option<String>, String>,
+    ),
 }
 struct StreamStop {
     stopped: Arc<AtomicBool>,
@@ -30,7 +33,7 @@ struct Server {
     child: std::process::Child,
     url: String,
     _registration: process::Registration,
-    _account: crate::accounts::Tracked,
+    _account: crate::provider::accounts::Tracked,
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -156,7 +159,7 @@ fn park(server: Server, request: &Request, session: String) {
 }
 fn command(request: &Request) -> Result<Command, String> {
     let mut command = Command::new(&request.binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(request.kind, &mut command)?;
     command
@@ -173,7 +176,8 @@ fn exec(request: &Request, args: &[&str], cancel: &AtomicBool) -> Result<String,
         .spawn()
         .map_err(|e| e.to_string())?;
     let _registration = process::register(child.id());
-    let _account = crate::accounts::track(child.id(), request.kind, &request.settings.account);
+    let _account =
+        crate::provider::accounts::track(child.id(), request.kind, &request.settings.account);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let output = Arc::new(Mutex::new(String::new()));
@@ -315,7 +319,8 @@ fn connect(
         .spawn()
         .map_err(|e| e.to_string())?;
     let registration = process::register(child.id());
-    let account = crate::accounts::track(child.id(), request.kind, &request.settings.account);
+    let account =
+        crate::provider::accounts::track(child.id(), request.kind, &request.settings.account);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let (send, receive) = mpsc::channel();
@@ -510,7 +515,7 @@ pub(super) fn run(
                 result?;
                 return emit(vec![Event::Done]);
             }
-            if crate::visual_bridge::configured(&request.settings.environment) {
+            if crate::provider::visual_bridge::configured(&request.settings.environment) {
                 emit(Vec::new())?;
             }
             if !connected && started.elapsed() >= Duration::from_secs(30) {

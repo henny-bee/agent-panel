@@ -1,6 +1,6 @@
 //! The same session cards and model IDs as mobileWorkspace.ts, independent of
 //! whether a conversation has been materialized on the native desktop.
-use crate::pickers;
+use crate::chat::composer::pickers;
 use monocode_core::{
     provider::Kind,
     store::{MobileSessionMetadata, Session},
@@ -18,7 +18,7 @@ pub(crate) fn checkout_branch(cwd: &str, branches: &mut HashMap<String, String>)
         return branch.clone();
     }
     let branch = head_branch(std::path::Path::new(cwd))
-        .or_else(|| crate::git_cache::get(cwd).and_then(|state| state.current))
+        .or_else(|| crate::runtime::git_cache::get(cwd).and_then(|state| state.current))
         .unwrap_or_default();
     branches.insert(key, branch.clone());
     branch
@@ -77,7 +77,7 @@ pub(crate) fn model_id(kind: Kind, model: Option<&str>) -> String {
 pub(crate) fn current_model_id(
     kind: Kind,
     model: Option<&str>,
-    models: &[monocode_core::catalog::Model],
+    models: &[monocode_core::provider::catalog::Model],
 ) -> String {
     let native = model.and_then(|id| monocode_core::store::native_model(id, kind.id()));
     model_id(
@@ -124,7 +124,7 @@ pub(crate) fn session(
     let mut value = json!({
         "id": id,
         "projectId": project,
-        "title": monocode_core::session_title::display_title(&summary.title, &summary.provider),
+        "title": monocode_core::session::title::display_title(&summary.title, &summary.provider),
         "harness": summary.provider,
         "model": model_id(kind, metadata.model.as_deref()),
         "modelName": pickers::cached_model_name(kind, metadata.model.as_deref()).to_string(),
@@ -148,7 +148,7 @@ pub(crate) fn session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monocode_core::{agent::AccessMode, store::Store};
+    use monocode_core::{session::agent::AccessMode, store::Store};
     use std::path::Path;
 
     #[test]

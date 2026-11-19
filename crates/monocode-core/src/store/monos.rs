@@ -89,14 +89,17 @@ impl Store {
         )))
     }
     /// Read the exact note/artifact referenced by a card, including its HTML body.
-    pub fn mono_document(&self, id: &str) -> Result<Option<crate::mono::Document>, String> {
+    pub fn mono_document(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::session::mono_model::Document>, String> {
         self.read_mono_document(id, true)
     }
     fn read_mono_document(
         &self,
         id: &str,
         body: bool,
-    ) -> Result<Option<crate::mono::Document>, String> {
+    ) -> Result<Option<crate::session::mono_model::Document>, String> {
         if !self.uses_monocode_schema() || !super::shared::has_table(&self.conn, "notes")? {
             return Ok(None);
         }
@@ -114,7 +117,7 @@ impl Store {
                 ),
                 [id],
                 |r| {
-                    Ok(crate::mono::Document {
+                    Ok(crate::session::mono_model::Document {
                         id: r.get(0)?,
                         kind: r.get(1)?,
                         title: r.get(2)?,
@@ -130,7 +133,7 @@ impl Store {
     }
     /// Metadata comes from the saved conversation, in both indexed Mono history
     /// and older sessions.blocks_json. No provider rollout is opened here.
-    pub fn mono_work(&self, id: i64) -> Result<Option<crate::mono::Work>, String> {
+    pub fn mono_work(&self, id: i64) -> Result<Option<crate::session::mono_model::Work>, String> {
         if !self.uses_monocode_schema() {
             return Ok(None);
         }
@@ -173,13 +176,13 @@ impl Store {
                     .map_err(|e| e.to_string())?,
             );
         }
-        let mut documents: Vec<crate::mono::Document> = Vec::new();
+        let mut documents: Vec<crate::session::mono_model::Document> = Vec::new();
         let mut launches = Vec::new();
         for block in &blocks {
             // Native visuals published in the Mono's chat are its visual documents.
             if let Some(document) = crate::mono::work::visual_document(block) {
                 if let Some(old) = documents.iter_mut().find(|d| d.id == document.id) {
-                    *old = crate::mono::Document {
+                    *old = crate::session::mono_model::Document {
                         created_at: old.created_at,
                         ..document
                     };
@@ -190,21 +193,21 @@ impl Store {
             }
             for card in crate::mono::work::document_cards(block) {
                 let id = card["documentId"].as_str().unwrap();
-                let mut document =
-                    self.read_mono_document(id, false)?
-                        .unwrap_or(crate::mono::Document {
-                            id: id.into(),
-                            kind: card["kind"].as_str().unwrap().into(),
-                            title: card["title"].as_str().unwrap().into(),
-                            summary: String::new(),
-                            body: String::new(),
-                            created_at: 0,
-                            updated_at: 0,
-                        });
+                let mut document = self.read_mono_document(id, false)?.unwrap_or(
+                    crate::session::mono_model::Document {
+                        id: id.into(),
+                        kind: card["kind"].as_str().unwrap().into(),
+                        title: card["title"].as_str().unwrap().into(),
+                        summary: String::new(),
+                        body: String::new(),
+                        created_at: 0,
+                        updated_at: 0,
+                    },
+                );
                 document.summary = card["summary"].as_str().unwrap_or_default().into();
                 if let Some(old) = documents
                     .iter_mut()
-                    .find(|d: &&mut crate::mono::Document| d.id == id)
+                    .find(|d: &&mut crate::session::mono_model::Document| d.id == id)
                 {
                     *old = document;
                 } else {
@@ -223,11 +226,11 @@ impl Store {
                 let session_id = self.shared_register(external)?;
                 if launches
                     .iter()
-                    .any(|l: &crate::mono::Launch| l.session_id == session_id)
+                    .any(|l: &crate::session::mono_model::Launch| l.session_id == session_id)
                 {
                     continue;
                 }
-                launches.push(crate::mono::Launch {
+                launches.push(crate::session::mono_model::Launch {
                     session_id,
                     cwd: value["cwd"].as_str().unwrap().into(),
                     title: value["title"].as_str().unwrap().into(),
@@ -302,7 +305,7 @@ mod tests {
         assert_eq!(documents[0].kind, "visual");
         assert_eq!(documents[0].title, "Deploys per week");
         assert_eq!((documents[0].created_at, documents[0].updated_at), (10, 20));
-        let loaded: crate::visual::VisualDocument =
+        let loaded: crate::session::visual::VisualDocument =
             serde_json::from_str(&documents[0].body).unwrap();
         assert_eq!(loaded.title, "Deploys per week");
     }

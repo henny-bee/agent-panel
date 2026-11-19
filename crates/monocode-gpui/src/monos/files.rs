@@ -86,7 +86,7 @@ impl Monos {
                 .overflow_y_scroll()
                 .px_3()
                 .py_3()
-                .font_family(crate::fonts::mono())
+                .font_family(crate::ui::fonts::mono())
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .text_color(content(0.85))

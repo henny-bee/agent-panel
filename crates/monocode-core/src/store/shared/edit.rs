@@ -183,7 +183,7 @@ impl Store {
             id,
             &[
                 ("provider_session_id", json!(provider_id)),
-                ("updated_at", json!(crate::time::now_ms())),
+                ("updated_at", json!(crate::sys::time::now_ms())),
                 (
                     "has_user_message",
                     json!(next.iter().any(|b| b["role"] == "user"
@@ -297,9 +297,9 @@ mod tests {
             fixture(json!([{"role":"user","id":"u","text":"Prompt","providerTurnId":"turn"}]));
         let rows = store.load(id).unwrap().rows;
         let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
-        let queue = crate::follow_up::State {
+        let queue = crate::session::follow_up::State {
             revision: 1,
-            messages: vec![crate::follow_up::Message {
+            messages: vec![crate::session::follow_up::Message {
                 id: "queued".into(),
                 text: "New queued prompt".into(),
                 ..Default::default()

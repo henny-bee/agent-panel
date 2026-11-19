@@ -2,7 +2,7 @@
 //! occur until the shell invokes poll; acknowledgment persistence stays in shell.
 use gpui::{Context, EventEmitter};
 use monocode_core::{
-    session_groups::WorkItem,
+    session::groups::WorkItem,
     store::{Session, Store},
 };
 use serde::{Deserialize, Serialize};
@@ -252,8 +252,9 @@ fn timestamp(value: &str) -> i64 {
         .unwrap_or(0)
 }
 fn api(endpoint: &str) -> Result<Value, String> {
-    let binary = monocode_core::scm::resolve_gui_binary("gh").ok_or("GitHub CLI not found")?;
-    let text = monocode_core::cli::output(
+    let binary =
+        monocode_core::vcs::git::scm::resolve_gui_binary("gh").ok_or("GitHub CLI not found")?;
+    let text = monocode_core::provider::cli::output(
         &binary,
         &[
             "api".into(),
@@ -292,8 +293,8 @@ fn summaries(items: &[(String, u64)]) -> Option<HashMap<(String, u64), Value>> {
             ));
         }
         query.push('}');
-        let binary = monocode_core::scm::resolve_gui_binary("gh")?;
-        let text = monocode_core::cli::output(
+        let binary = monocode_core::vcs::git::scm::resolve_gui_binary("gh")?;
+        let text = monocode_core::provider::cli::output(
             &binary,
             &[
                 "api".into(),

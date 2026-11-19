@@ -56,14 +56,17 @@ pub fn resolve_path(path: &Path, cwd: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     if super::remote::is_remote(cwd) {
-        if let Some(remote) = crate::remote::parse_remote_path(&cwd.to_string_lossy()) {
+        if let Some(remote) = crate::files::remote::parse_remote_path(&cwd.to_string_lossy()) {
             let path = path.to_string_lossy();
             let host = if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
                 path.into_owned()
             } else {
                 super::join_path(&remote.host_path, &path)
             };
-            return PathBuf::from(crate::remote::remote_path(&remote.environment_id, &host));
+            return PathBuf::from(crate::files::remote::remote_path(
+                &remote.environment_id,
+                &host,
+            ));
         }
     }
     let path = expand_home(path);

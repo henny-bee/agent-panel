@@ -1,10 +1,12 @@
 //! One-time copies of saved desktop conversations into the native store.
 use super::Store;
 use crate::{
-    agent::Settings,
     provider::Kind,
-    tool::{ToolCall, ToolState},
-    transcript::Transcript,
+    session::{
+        agent::Settings,
+        tool::{ToolCall, ToolState},
+        transcript::Transcript,
+    },
 };
 use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
@@ -16,7 +18,7 @@ use std::{
 /// Tauri's application-data location, keyed by its bundle identifier.
 pub fn monocode_database() -> PathBuf {
     #[cfg(target_os = "macos")]
-    let base = crate::accounts::home()
+    let base = crate::session::profile::home()
         .unwrap_or_default()
         .join("Library/Application Support");
     #[cfg(windows)]
@@ -25,7 +27,7 @@ pub fn monocode_database() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            crate::accounts::home()
+            crate::session::profile::home()
                 .unwrap_or_default()
                 .join(".local/share")
         });
@@ -165,7 +167,7 @@ fn import_sessions(
             effort: ["effort", "reasoningEffort", "reasoning_effort", "variant"]
                 .into_iter()
                 .find_map(|key| model_settings.get(key).cloned()),
-            access: crate::agent::AccessMode::from_id(&session.get::<_, String>(5)?),
+            access: crate::session::agent::AccessMode::from_id(&session.get::<_, String>(5)?),
             fast: model_settings.get("fast").is_some_and(|v| v == "true"),
             service_tier: model_settings.get("serviceTier").cloned(),
             thinking: model_settings.get("thinking").and_then(|v| v.parse().ok()),
@@ -178,8 +180,11 @@ fn import_sessions(
         let mut offset = 0;
         for block in &blocks {
             let rows = self::transcript(std::slice::from_ref(block))?.rows;
-            if let Some(prompt) = rows.iter().rposition(crate::transcript::Row::is_prompt) {
-                if let Some(info) = super::shared::project_turns(std::slice::from_ref(block))
+            if let Some(prompt) = rows
+                .iter()
+                .rposition(crate::session::transcript::Row::is_prompt)
+            {
+                if let Some(info) = super::shared::turns::project_turns(std::slice::from_ref(block))
                     .map_err(invalid)?
                     .into_values()
                     .next()
@@ -264,7 +269,7 @@ fn transcript(blocks: &[Value]) -> rusqlite::Result<Transcript> {
         let role = block["role"].as_str().unwrap_or("system");
         let text = block["text"].as_str().unwrap_or("");
         if block["interjection"].is_object() {
-            let note = crate::transcript::Interjection {
+            let note = crate::session::transcript::Interjection {
                 text: text.into(),
                 custom_type: block["interjection"]["customType"]
                     .as_str()
@@ -293,7 +298,7 @@ fn transcript(blocks: &[Value]) -> rusqlite::Result<Transcript> {
                 input: json!({"command":preview["title"].as_str().or(tool["title"].as_str()).unwrap_or(text),
                     "path":preview["path"],"query":preview["query"]}).to_string(),
                 output: tool["detail"].as_str().filter(|s| !s.is_empty()).or(preview["output"].as_str()).unwrap_or("").into(),
-                panel: crate::tool::tasks::from_desktop(block),
+                panel: crate::session::tool::tasks::from_desktop(block),
                 display: None,
                 // Imported activity is historical, never an active native job.
                 state: match tool["status"].as_str() {
@@ -306,10 +311,10 @@ fn transcript(blocks: &[Value]) -> rusqlite::Result<Transcript> {
             transcript.begin("tool");
             transcript.rows.last_mut().unwrap().text =
                 serde_json::to_string(&call).map_err(invalid)?;
-        } else if role == "tasks" && crate::tool::tasks::from_desktop(block).is_some() {
+        } else if role == "tasks" && crate::session::tool::tasks::from_desktop(block).is_some() {
             let mut call = ToolCall::new(block["id"].as_str().unwrap_or(""), "update_plan");
             call.input = block["taskList"].to_string();
-            call.panel = crate::tool::tasks::from_desktop(block);
+            call.panel = crate::session::tool::tasks::from_desktop(block);
             call.state = ToolState::Completed;
             transcript.begin("tool");
             transcript.rows.last_mut().unwrap().text =
@@ -414,7 +419,10 @@ mod tests {
         assert_eq!(settings.effort.as_deref(), Some("high"));
         assert!(settings.fast);
         assert_eq!(settings.service_tier.as_deref(), Some("fast"));
-        assert_eq!(settings.access, crate::agent::AccessMode::AutoAcceptEdits);
+        assert_eq!(
+            settings.access,
+            crate::session::agent::AccessMode::AutoAcceptEdits
+        );
         assert_eq!(
             settings.worktree_cwd.as_deref(),
             dir.path().join("worktree").to_str()

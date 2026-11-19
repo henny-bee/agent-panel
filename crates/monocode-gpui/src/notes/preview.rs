@@ -1,9 +1,8 @@
 //! Notes use shared Markdown rendering with their desktop image asset paths.
 use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
+    chat::markdown::{self, MarkdownRow, Part, Tone, model},
     runtime::{Database, locked},
-    theme::*,
+    ui::theme::*,
 };
 use gpui::{AnyElement, Context, ImageSource, Render, Role, Window, div, prelude::*, px};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -70,7 +69,7 @@ impl Preview {
     }
 }
 fn append_markdown(rows: &mut Vec<Row>, text: &str, cwd: &str) {
-    for block in &markdown_model::parse_full_hard_breaks(text).blocks {
+    for block in &model::parse_full_hard_breaks(text).blocks {
         for mut row in markdown::rows(&block.block) {
             markdown::resolve_file_links(&mut row, cwd);
             rows.push(Row::Markdown(row));
@@ -100,7 +99,7 @@ impl Render for Preview {
                         .w_full()
                         .min_w_0()
                         .child(
-                            crate::image_memory::image(source.clone())
+                            crate::ui::image_memory::image(source.clone())
                                 .id(("note-image", ix))
                                 .role(Role::Image)
                                 .aria_label(alt.clone())

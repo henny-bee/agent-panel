@@ -1,7 +1,7 @@
 //! Desktop identities live in the workspace webview, while their conversations
 //! and provider configuration remain in the shared desktop database.
 use super::*;
-use crate::desktop_preferences::DesktopPreferences;
+use crate::store::desktop_preferences::DesktopPreferences;
 use serde_json::Value;
 
 const IDENTITY_FIELDS: &[&str] = &[
@@ -133,7 +133,7 @@ fn desktop_mono(store: &Store, value: &Value, backgrounds: Option<&Value>) -> Op
         .filter(|path| !path.trim().is_empty())
         .map(|path| Background {
             path: path.into(),
-            effect: crate::project_appearance::Effect::GradientBlur,
+            effect: crate::project::appearance::Effect::GradientBlur,
             ..Default::default()
         });
     let mut mono = Mono {
@@ -218,7 +218,7 @@ fn css_color(raw: &str) -> Option<u32> {
 /// Reuse the provider-owned rollout directory prepared by the desktop app.
 /// Nothing is created or copied when the native UI opens a Mono.
 pub(crate) fn codex_home(root: &Path, account: &str) -> Result<Option<PathBuf>, String> {
-    crate::accounts::validate_id(account)?;
+    crate::provider::accounts::validate_id(account)?;
     let home = root
         .parent()
         .ok_or("Mono storage has no data directory")?

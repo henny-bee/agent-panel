@@ -23,7 +23,7 @@ struct Floating {
 }
 fn hide(window: &mut Window) {
     #[cfg(all(target_os = "macos", not(test)))]
-    crate::traffic_lights::hide(window);
+    crate::ui::traffic_lights::hide(window);
     #[cfg(any(not(target_os = "macos"), test))]
     window.remove_window();
 }
@@ -160,7 +160,13 @@ impl Floating {
                             .cursor_pointer()
                             .when(!selected, |d| d.opacity(0.4).hover(|s| s.opacity(1.)))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(avatar::avatar(&mono.mascot, mono.color, "idle", 28., true))
+                            .child(crate::ui::avatar::avatar(
+                                &mono.mascot,
+                                mono.color,
+                                "idle",
+                                28.,
+                                true,
+                            ))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if this.selected != id {
                                     this.select(id.clone(), window, cx);
@@ -234,7 +240,7 @@ impl Floating {
             .border_b_1()
             .border_color(content(0.08))
             .on_mouse_down(MouseButton::Left, |_, window, _| drag(window))
-            .child(avatar::avatar(
+            .child(crate::ui::avatar::avatar(
                 &mono.mascot,
                 mono.color,
                 state,
@@ -343,7 +349,7 @@ impl gpui::Render for Floating {
             .size_full()
             .bg(shell_fill())
             .text_color(content(1.))
-            .font_family(crate::fonts::UI)
+            .font_family(crate::ui::fonts::UI)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.stop(cx);
@@ -386,7 +392,7 @@ impl gpui::Render for Floating {
                                         .justify_center()
                                         .gap_4()
                                         .when_some(mono, |d, mono| {
-                                            d.child(avatar::avatar(
+                                            d.child(crate::ui::avatar::avatar(
                                                 &mono.mascot,
                                                 mono.color,
                                                 "idle",
@@ -450,7 +456,13 @@ impl Monos {
             .items_center()
             .justify_center()
             .gap_3()
-            .child(avatar::avatar(&mono.mascot, mono.color, "idle", 48., true))
+            .child(crate::ui::avatar::avatar(
+                &mono.mascot,
+                mono.color,
+                "idle",
+                48.,
+                true,
+            ))
             .child(
                 div()
                     .text_size(px(13.))
@@ -459,7 +471,7 @@ impl Monos {
                     .child(format!("{} is open in a floating chat.", mono.label())),
             )
             .child(
-                crate::settings::widgets::secondary_button(
+                crate::ui::widgets::secondary_button(
                     "floating-show-here",
                     "Show here",
                     false,
@@ -571,7 +583,7 @@ impl Monos {
             kind: WindowKind::PopUp,
             is_minimizable: false,
             display_id: display.map(|d| d.id()),
-            window_background: crate::theme::window_backdrop(!is_light()),
+            window_background: crate::ui::theme::window_backdrop(!is_light()),
             app_id: Some("dev.usemono.mono-chat".into()),
             ..Default::default()
         };
@@ -582,7 +594,7 @@ impl Monos {
             let window_owner = owner.clone();
             let result = cx.open_window(options, |window, cx| {
                 #[cfg(all(target_os = "macos", not(test)))]
-                crate::traffic_lights::floating_panel(window, true);
+                crate::ui::traffic_lights::floating_panel(window, true);
                 #[cfg(any(not(target_os = "macos"), test))]
                 let _ = window;
                 cx.new(|cx| {

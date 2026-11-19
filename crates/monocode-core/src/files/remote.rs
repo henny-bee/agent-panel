@@ -1,5 +1,6 @@
 //! The native equivalent of `connections/model/remoteCommands.ts`.
 //! Keep host paths behind `remote://` paths at every workspace API boundary.
+
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -16,7 +17,7 @@ pub fn is_remote(path: &Path) -> bool {
 /// This is synchronous, like the filesystem APIs; call from a background task.
 pub fn run_remote_command(command: &str, args: Value) -> Result<Value, String> {
     run_with(command, args, |environment, params| {
-        let connections = crate::remote::default_connections()?;
+        let connections = crate::integrations::remote::default_connections()?;
         let machine = connections.machine_for_environment(environment)?;
         connections.request(&machine.id, "workspace.run", params)
     })
@@ -131,7 +132,7 @@ fn to_host(value: &mut Value, environment: &mut Option<String>) -> Result<(), St
             to_host(value, environment)?;
         }
     } else if let Value::String(path) = value {
-        let remote = crate::remote::parse_remote_path(path)
+        let remote = crate::files::remote::parse_remote_path(path)
             .ok_or("Files can only be copied or moved within one machine.")?;
         if environment
             .as_ref()
@@ -148,7 +149,7 @@ fn to_host(value: &mut Value, environment: &mut Option<String>) -> Result<(), St
 fn client_result(command: &str, environment: &str, args: &Value, mut result: Value) -> Value {
     let prefix = |path: &mut Value| {
         if let Some(host) = path.as_str() {
-            *path = Value::String(crate::remote::remote_path(environment, host));
+            *path = Value::String(crate::files::remote::remote_path(environment, host));
         }
     };
     let root = args
@@ -159,7 +160,7 @@ fn client_result(command: &str, environment: &str, args: &Value, mut result: Val
     let relative_path = |entry: &mut Value| {
         if let Some(path) = entry.get_mut("path") {
             if let Some(relative) = path.as_str() {
-                *path = Value::String(crate::remote::remote_path(
+                *path = Value::String(crate::files::remote::remote_path(
                     environment,
                     &format!("{root}/{relative}"),
                 ));
@@ -314,4 +315,44 @@ mod tests {
             "remote://linux/trees/one"
         );
     }
+}
+
+pub const REMOTE_PATH_PREFIX: &str = "remote://";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemotePath {
+    pub environment_id: String,
+    pub host_path: String,
+}
+
+/// Qualifies a host path without losing Windows drive letters or UNC roots.
+pub fn remote_path(environment_id: &str, host_path: &str) -> String {
+    let path = host_path.replace('\\', "/");
+    let path = if path.starts_with("//") {
+        &path[1..]
+    } else {
+        path.trim_start_matches('/')
+    };
+    format!("{REMOTE_PATH_PREFIX}{environment_id}/{path}")
+}
+
+pub fn parse_remote_path(path: &str) -> Option<RemotePath> {
+    let path = path.strip_prefix(REMOTE_PATH_PREFIX)?.replace('\\', "/");
+    let (environment_id, host_path) = path.split_once('/')?;
+    if environment_id.is_empty() {
+        return None;
+    }
+    let bytes = host_path.as_bytes();
+    let drive = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes.len() == 2 || bytes[2] == b'/');
+    Some(RemotePath {
+        environment_id: environment_id.into(),
+        host_path: if drive {
+            host_path.into()
+        } else {
+            format!("/{host_path}")
+        },
+    })
 }

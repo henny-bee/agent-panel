@@ -8,18 +8,23 @@ pub(crate) use avatar::image as avatar_image;
 pub(crate) use ui::relative_time;
 
 use crate::{
-    diff_view::{DiffEvent, DiffView},
-    input::{self, Input},
-    popover::AnchorSlot,
+    editor::diff_view::{DiffEvent, DiffView},
     runtime::{Database, locked},
-    theme::*,
+    ui::{
+        input::{self, Input},
+        popover::AnchorSlot,
+        theme::*,
+    },
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
     ListState, Pixels, Subscription, px,
 };
 use monocode_core::{
-    inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
+    integrations::inbox::{
+        self as model, Checks, Details, Diff, Item, Service, Thread,
+        state::{Snapshot, ViewState},
+    },
     store::Session,
 };
 use std::{
@@ -46,7 +51,7 @@ pub(crate) struct Inbox {
     service: Service,
     projects: Vec<PathBuf>,
     appearances:
-        std::collections::HashMap<String, monocode_core::project_appearance::ProjectAppearance>,
+        std::collections::HashMap<String, monocode_core::project::appearance::ProjectAppearance>,
     state: ViewState,
     snapshot: Snapshot,
     sessions: Vec<Session>,
@@ -108,7 +113,7 @@ pub(crate) struct Inbox {
     resize_start: Option<(f32, f32)>,
     active: bool,
     refresh_queued: bool,
-    notifications: model::NotificationTracker,
+    notifications: model::state::NotificationTracker,
     last_refresh: Instant,
     _subscriptions: Vec<Subscription>,
 }
@@ -312,7 +317,7 @@ impl Inbox {
             resize_start: None,
             active: false,
             refresh_queued: false,
-            notifications: model::NotificationTracker::default(),
+            notifications: model::state::NotificationTracker::default(),
             last_refresh: Instant::now(),
             _subscriptions: subscriptions,
         }
@@ -359,7 +364,7 @@ impl Inbox {
         &mut self,
         appearances: std::collections::HashMap<
             String,
-            monocode_core::project_appearance::ProjectAppearance,
+            monocode_core::project::appearance::ProjectAppearance,
         >,
         cx: &mut Context<Self>,
     ) {

@@ -2,7 +2,7 @@ use super::*;
 use gpui::{Div, ElementId, Stateful};
 use serde_json::{Value, json};
 pub(crate) struct CardAction(pub Value);
-impl EventEmitter<CardAction> for crate::transcript::TranscriptView {}
+impl EventEmitter<CardAction> for crate::chat::transcript::TranscriptView {}
 /// The chat's one-line cards: a 12px-round outline that brightens on hover.
 fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
@@ -24,7 +24,7 @@ fn line_card(id: impl Into<ElementId>) -> Stateful<Div> {
 fn choices(
     value: &Value,
     chosen: Option<&str>,
-    cx: &mut Context<crate::transcript::TranscriptView>,
+    cx: &mut Context<crate::chat::transcript::TranscriptView>,
 ) -> AnyElement {
     let options: Vec<String> = value["options"]
         .as_array()
@@ -108,7 +108,10 @@ fn choices(
         .into_any_element()
 }
 /// ArtifactCard: the document's icon and title, opening it in the reader.
-fn artifact(value: &Value, cx: &mut Context<crate::transcript::TranscriptView>) -> AnyElement {
+fn artifact(
+    value: &Value,
+    cx: &mut Context<crate::chat::transcript::TranscriptView>,
+) -> AnyElement {
     let html = value["kind"] == "html";
     let label = if html { "visual" } else { "document" };
     let title = value["title"].as_str().unwrap_or("Document").to_string();
@@ -143,8 +146,8 @@ fn artifact(value: &Value, cx: &mut Context<crate::transcript::TranscriptView>) 
 /// runs in. Without a known state it shows the plain chat mark.
 pub(crate) fn launch(
     id: i64,
-    view: Option<&crate::transcript::LaunchView>,
-    cx: &mut Context<crate::transcript::TranscriptView>,
+    view: Option<&crate::chat::transcript::LaunchView>,
+    cx: &mut Context<crate::chat::transcript::TranscriptView>,
 ) -> AnyElement {
     let title = view.map_or("Agent session".to_string(), |v| v.title.clone());
     let (label, glyph, color) = match view.map(|v| v.state) {
@@ -164,10 +167,10 @@ pub(crate) fn launch(
     // A working session's loader turns on the shared clock, at 15fps since
     // each step repaints the transcript it sits in.
     let mark = if glyph == "loader-03" {
-        crate::pulse::looping(
+        crate::ui::motion::pulse::looping(
             gpui::SharedString::from(format!("launch-loader-{id}")),
             std::time::Duration::from_secs(1),
-            crate::pulse::Rate::Half,
+            crate::ui::motion::pulse::Rate::Half,
             move |turn| {
                 icon(glyph, 16.)
                     .text_color(color)
@@ -239,7 +242,7 @@ pub(crate) fn launch(
 pub(crate) fn render(
     value: &Value,
     chosen: Option<&str>,
-    cx: &mut Context<crate::transcript::TranscriptView>,
+    cx: &mut Context<crate::chat::transcript::TranscriptView>,
 ) -> AnyElement {
     let kind = value["type"].as_str().unwrap_or_default();
     match kind {
@@ -249,7 +252,7 @@ pub(crate) fn render(
             let id = value["sessionId"].as_i64().unwrap_or_default();
             let view = value["state"]
                 .as_str()
-                .map(|state| crate::transcript::LaunchView {
+                .map(|state| crate::chat::transcript::LaunchView {
                     title: value["title"].as_str().unwrap_or("Agent session").into(),
                     state: match state {
                         "working" => "working",
@@ -377,10 +380,10 @@ fn launched_state(session: &Conversation, cx: &App) -> &'static str {
 /// LaunchedSessionCard: how each session `mono` started stands, for its cards
 /// in the chat and on the phone.
 pub(crate) fn launch_views(
-    mono: &monocode_core::mono::Mono,
-    owner: &crate::shell::Shell,
+    mono: &monocode_core::session::mono_model::Mono,
+    owner: &crate::app::shell::Shell,
     cx: &App,
-) -> HashMap<i64, crate::transcript::LaunchView> {
+) -> HashMap<i64, crate::chat::transcript::LaunchView> {
     // Saved summaries keep cards current without opening their providers.
     let summaries = owner.mono_session_views(cx);
     // LaunchedSessionCard: each launch's live state, for the chat's cards.
@@ -391,7 +394,7 @@ pub(crate) fn launch_views(
             let view = match session {
                 Some(session) => {
                     let session = session.read(cx);
-                    crate::transcript::LaunchView {
+                    crate::chat::transcript::LaunchView {
                         title: session.summary.title.clone(),
                         state: launched_state(session, cx),
                         harness: session.summary.provider.clone(),
@@ -400,7 +403,7 @@ pub(crate) fn launch_views(
                 }
                 None => {
                     let summary = summaries.iter().find(|s| s.id == launch.session_id);
-                    crate::transcript::LaunchView {
+                    crate::chat::transcript::LaunchView {
                         title: summary
                             .map(|s| s.title.clone())
                             .unwrap_or_else(|| launch.title.clone()),
@@ -434,7 +437,7 @@ impl Monos {
         let Some(chat) = self.chat() else {
             return;
         };
-        let now = monocode_core::time::now_ms();
+        let now = monocode_core::sys::time::now_ms();
         let launches = self
             .owner
             .upgrade()
@@ -578,7 +581,7 @@ impl Monos {
                             value["name"].as_str().unwrap_or_default().into(),
                             value["instructions"].as_str().unwrap_or_default().into(),
                             schedule,
-                            monocode_core::time::now_ms(),
+                            monocode_core::sys::time::now_ms(),
                         )
                     });
                 match result {

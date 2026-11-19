@@ -2,7 +2,7 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use monocode_core::{
-    agent::{Decision, Question, QuestionItem, QuestionOption},
+    session::agent::{Decision, Question, QuestionItem, QuestionOption},
     store::{RemoteSession, RemoteUpload},
 };
 use serde_json::{Value, json};
@@ -58,7 +58,7 @@ pub(crate) fn host_model(provider: &str, model: Option<&str>) -> Result<String, 
     })
 }
 fn model_settings(provider: &str, settings: &Settings) -> HashMap<String, String> {
-    monocode_core::remote::protocol::wire_model_settings(provider, settings)
+    monocode_core::integrations::remote::protocol::wire_model_settings(provider, settings)
 }
 /// Serializes command preparation with idle setting updates for this desktop
 /// session, while observation itself never holds an operation lock.
@@ -105,7 +105,7 @@ pub(crate) fn configure_saved(store: Database, id: i64) -> Result<(), String> {
         }
         (binding, store.agent_settings(id)?.unwrap_or_default())
     };
-    let client = monocode_core::remote::default_connections()?;
+    let client = monocode_core::integrations::remote::default_connections()?;
     let machine = binding.machine(&client)?;
     let snapshot =
         client.load_session(&machine.id, binding.session_id.as_deref().unwrap(), None)?;
@@ -144,7 +144,7 @@ fn commit(
 /// Commands are written before I/O. A lost response leaves the original ID for
 /// Retry or restart recovery; the host's receipt is the only commit boundary.
 fn dispatch_outbox(
-    client: &monocode_core::remote::Connections,
+    client: &monocode_core::integrations::remote::Connections,
     machine: &str,
     store: &Database,
     binding: &mut RemoteSession,
@@ -256,7 +256,7 @@ fn prepare_attachments(
             .and_then(|s| s.to_str())
             .filter(|name| !name.trim().is_empty() && name.encode_utf16().count() <= 255)
             .ok_or("Invalid attachment file name")?;
-        let id = monocode_core::remote::protocol::new_attachment_id();
+        let id = monocode_core::integrations::remote::protocol::new_attachment_id();
         let (mime, kind) = attachment_type(path);
         references.push(json!({"id":id,"name":name,"size":size,"mimeType":mime,"kind":kind}));
         uploads.push(RemoteUpload {
@@ -269,7 +269,7 @@ fn prepare_attachments(
     Ok((references, uploads))
 }
 fn prepare_for_session(
-    client: &monocode_core::remote::Connections,
+    client: &monocode_core::integrations::remote::Connections,
     machine: &str,
     environment: &str,
     files: &[std::path::PathBuf],
@@ -282,8 +282,8 @@ fn prepare_for_session(
     let mut uploads = Vec::new();
     for path in files {
         let source = path.to_string_lossy();
-        if monocode_core::remote::attachments::is_attachment_source(&source) {
-            let source = monocode_core::remote::attachments::parse_source(&source)
+        if monocode_core::integrations::remote::attachments::is_attachment_source(&source) {
+            let source = monocode_core::integrations::remote::attachments::parse_source(&source)
                 .ok_or("Invalid remote attachment")?;
             if source.environment != environment {
                 return Err("Attachment belongs to another machine".into());
@@ -314,7 +314,7 @@ fn prepare_for_session(
 }
 
 fn upload_pending(
-    client: &monocode_core::remote::Connections,
+    client: &monocode_core::integrations::remote::Connections,
     machine: &str,
     store: &Database,
     binding: &mut RemoteSession,
@@ -365,8 +365,8 @@ fn upload_pending(
 fn accounting(
     snapshot: &Value,
 ) -> (
-    Option<monocode_core::context::Usage>,
-    Option<monocode_core::agent::TurnMetrics>,
+    Option<monocode_core::session::context::Usage>,
+    Option<monocode_core::session::agent::TurnMetrics>,
 ) {
     let context = snapshot["session"]
         .get("context")
@@ -477,7 +477,7 @@ pub(crate) fn run(
     cancel: Arc<AtomicBool>,
     tx: async_channel::Sender<Update>,
 ) {
-    match monocode_core::remote::default_connections() {
+    match monocode_core::integrations::remote::default_connections() {
         Ok(client) => run_with_client(
             client, summary, prompt, settings, controls, store, cancel, tx,
         ),
@@ -491,7 +491,7 @@ pub(crate) fn run(
     reason = "Mirrors the turn worker inputs while injecting the remote transport for isolation"
 )]
 pub(crate) fn run_with_client(
-    client: Arc<monocode_core::remote::Connections>,
+    client: Arc<monocode_core::integrations::remote::Connections>,
     summary: Session,
     prompt: String,
     mut settings: Settings,
@@ -544,8 +544,10 @@ pub(crate) fn run_with_client(
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
             {
-                let models =
-                    monocode_core::catalog::remote_models(&summary.cwd, &summary.provider)?;
+                let models = monocode_core::provider::catalog::remote_models(
+                    &summary.cwd,
+                    &summary.provider,
+                )?;
                 if let Some(model) = models
                     .iter()
                     .find(|model| model.default)
@@ -571,7 +573,7 @@ pub(crate) fn run_with_client(
                 create["modelSettings"] = json!(model_settings(&summary.provider, &settings));
                 create["runtimeMode"] = json!(settings.access.id());
                 if let Some(path) = &settings.worktree_cwd {
-                    let remote = monocode_core::remote::parse_remote_path(path)
+                    let remote = monocode_core::files::remote::parse_remote_path(path)
                         .ok_or("Invalid remote worktree")?;
                     if remote.environment_id != binding.project.environment_id {
                         return Err("Worktree belongs to another machine".into());
@@ -621,7 +623,7 @@ pub(crate) fn run_with_client(
             binding.outbox.push(send);
             binding.rejected = None;
             binding.summary.has_messages = true;
-            binding.summary.updated_at = monocode_core::time::now_ms();
+            binding.summary.updated_at = monocode_core::sys::time::now_ms();
             journal(&store, &binding)?;
             let descriptor = client.request(&machine.id, "environment.describe", json!({}))?;
             if !descriptor["providers"].as_array().is_some_and(|providers| {
@@ -665,7 +667,7 @@ pub(crate) fn run_with_client(
             next.start = latest_rows.len();
             if revision != last_revision {
                 let mut projected = snapshot.clone();
-                monocode_core::remote::attachments::qualify_snapshot(
+                monocode_core::integrations::remote::attachments::qualify_snapshot(
                     &mut projected,
                     &binding.project.environment_id,
                     &id,

@@ -1,7 +1,7 @@
 //! Pending approval/question cards and request-level announcement bookkeeping.
-use crate::theme::*;
+use crate::ui::theme::*;
 use gpui::{Context, EventEmitter, Role, div, prelude::*, px};
-use monocode_core::agent::Decision;
+use monocode_core::session::agent::Decision;
 use std::{
     collections::{HashMap, HashSet},
     time::SystemTime,

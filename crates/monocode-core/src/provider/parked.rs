@@ -46,7 +46,7 @@ pub(super) struct Wire {
     writer: Option<thread::JoinHandle<()>>,
     // Held until the child is gone, which may be after `Wire` is dropped.
     _registration: Option<process::Registration>,
-    _account: Option<crate::accounts::Tracked>,
+    _account: Option<crate::provider::accounts::Tracked>,
 }
 #[cfg(unix)]
 fn spawn_process(command: &mut Command) -> std::io::Result<std::process::Child> {
@@ -77,7 +77,8 @@ impl Wire {
             )
         })?;
         let registration = process::register(child.id());
-        let account = crate::accounts::track(child.id(), request.kind, &request.settings.account);
+        let account =
+            crate::provider::accounts::track(child.id(), request.kind, &request.settings.account);
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let mut stdin = child.stdin.take().unwrap();
@@ -311,7 +312,7 @@ pub(super) fn key(request: &Request) -> String {
             .as_ref()
             .map(|mono| (&mono.root, &mono.mono.id)),
         request.settings.disable_claude_hooks,
-        crate::accounts::claude_entrypoint()
+        crate::provider::accounts::claude_entrypoint()
     ])
     .to_string()
 }
@@ -576,8 +577,8 @@ mod tests {
             settings: Settings::default(),
         };
         let regular = key(&request);
-        request.settings.mono = Some(crate::agent::MonoContext {
-            mono: crate::mono::Mono {
+        request.settings.mono = Some(crate::session::agent::MonoContext {
+            mono: crate::session::mono_model::Mono {
                 id: "first-mono".into(),
                 ..Default::default()
             },

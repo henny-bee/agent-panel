@@ -4,6 +4,7 @@ pub mod document;
 mod index;
 pub(crate) use index::{git_output_capped, is_indexable_root};
 pub use index::{list_project_files, list_project_files_sync_cancellable, ProjectFile};
+pub mod external_editor;
 mod name;
 mod paths;
 pub mod remote;
@@ -17,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::scm::{expand_home, path_to_js};
+use crate::vcs::git::scm::{expand_home, path_to_js};
 pub use name::{
     leaf_name, validate_file_name, well_formed_file_name, NameIssue, NameIssueKind, Severity,
 };
@@ -137,7 +138,7 @@ fn git_ignored_names(dir: &Path, names: &[&str]) -> Option<HashSet<String>> {
     if names.is_empty() {
         return Some(HashSet::new());
     }
-    let mut child = crate::scm::git_cmd()
+    let mut child = crate::vcs::git::scm::process::git_cmd()
         .arg("-C")
         .arg(dir)
         .args(["check-ignore", "--stdin", "-z"])
@@ -451,7 +452,7 @@ pub fn open_path_with_default_app(path: &Path) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut command = Command::new("xdg-open");
     command.arg(&path);
-    crate::process::configure_child(&mut command);
+    crate::sys::process::configure_child(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
     if output.status.success() {
         Ok(())
@@ -480,7 +481,7 @@ pub fn reveal_path(path: &Path) -> Result<(), String> {
         let path_str = path.to_str().ok_or_else(|| "Invalid path".to_string())?;
         let mut command = Command::new("open");
         command.args(["-R", path_str]);
-        crate::process::configure_child(&mut command);
+        crate::sys::process::configure_child(&mut command);
         let status = command.status().map_err(|e| e.to_string())?;
         if !status.success() {
             return Err("Could not reveal in Finder.".into());
@@ -496,7 +497,7 @@ pub fn reveal_path(path: &Path) -> Result<(), String> {
         // Only the path may be quoted: explorer ignores a quoted `/select,` switch.
         let mut command = Command::new("explorer");
         command.raw_arg(format!("/select,\"{path_str}\""));
-        crate::process::configure_child(&mut command);
+        crate::sys::process::configure_child(&mut command);
         command.spawn().map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -508,7 +509,7 @@ pub fn reveal_path(path: &Path) -> Result<(), String> {
             .ok_or_else(|| "File has no parent directory.".to_string())?;
         let mut command = Command::new("xdg-open");
         command.arg(parent);
-        crate::process::configure_child(&mut command);
+        crate::sys::process::configure_child(&mut command);
         let status = command.status().map_err(|e| e.to_string())?;
         if !status.success() {
             return Err("Could not open the containing folder.".into());

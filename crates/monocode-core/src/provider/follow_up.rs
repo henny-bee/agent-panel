@@ -1,6 +1,6 @@
 //! The same mid-turn wire messages used by the React provider adapters.
 use super::*;
-use crate::follow_up::Message;
+use crate::session::follow_up::Message;
 
 static STEER_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 

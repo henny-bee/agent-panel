@@ -18,7 +18,7 @@ impl Protocol {
             .unwrap_or_else(|| {
                 format!(
                     "native-compaction-{}-{}",
-                    crate::time::now_ms(),
+                    crate::sys::time::now_ms(),
                     SEQUENCE.fetch_add(1, Ordering::Relaxed)
                 )
             });

@@ -1,24 +1,15 @@
 //! AppearancePage, ChatBackgroundCard, workspace themes and AccentColorPicker.
-use crate::popover::{Align, Anchor, Side, popover};
-use crate::settings::{
-    SettingsEvent, SettingsView, SliderKind, preferences::UI_SCALE_PERCENTS,
-    widgets::secondary_button,
+use crate::ui::palettes::{ACCENTS, swatch};
+use crate::ui::popover::{Align, Anchor, Side, popover};
+use crate::ui::theme::*;
+use crate::{
+    settings::{SettingsEvent, SettingsView, SliderKind},
+    ui::{preferences::UI_SCALE_PERCENTS, widgets::secondary_button},
 };
-use crate::theme::*;
 use gpui::{
     AnyElement, Context, Focusable, Role, SharedString, Window, div, linear_color_stop,
     linear_gradient, prelude::*, px, rgb,
 };
-
-/// ACCENT_COLOR_PRESETS, after the Default swatch.
-pub(crate) const ACCENTS: [(u32, &str); 6] = [
-    (0x4da3f5, "Blue"),
-    (0x8b5cf6, "Violet"),
-    (0xec4899, "Pink"),
-    (0xef4444, "Red"),
-    (0xf59e0b, "Orange"),
-    (0x10b981, "Green"),
-];
 
 const EFFECTS: [(&str, &str); 6] = [
     ("none", "None"),
@@ -44,40 +35,6 @@ pub(crate) fn parse_hex(text: &str) -> Option<u32> {
     (hex.len() == 6)
         .then(|| u32::from_str_radix(hex, 16).ok())
         .flatten()
-}
-
-/// Preview the palette's neutral tones and accent at a menu icon's 16px.
-pub(crate) fn swatch(surface: u32, panel: u32, solid: u32, accent: u32) -> AnyElement {
-    div()
-        .relative()
-        .size_4()
-        .overflow_hidden()
-        .rounded(px(4.))
-        .border_1()
-        .border_color(content(0.15))
-        .bg(rgb(surface))
-        .child(
-            div()
-                .absolute()
-                .top(px(2.))
-                .bottom(px(2.))
-                .left(px(4.))
-                .right(px(-1.))
-                .rounded_l(px(2.))
-                .border_1()
-                .border_color(rgb(solid))
-                .bg(rgb(panel)),
-        )
-        .child(
-            div()
-                .absolute()
-                .top(px(5.))
-                .left(px(7.))
-                .size(px(5.))
-                .rounded_full()
-                .bg(rgb(accent)),
-        )
-        .into_any_element()
 }
 
 impl SettingsView {
@@ -108,7 +65,7 @@ impl SettingsView {
                 |this, v, cx| this.update(cx, |p| p.theme = v.into()),
             )],
         )];
-        let options = crate::settings::palettes::PALETTES
+        let options = crate::ui::palettes::PALETTES
             .iter()
             .map(|&(id, label, dark, pale)| {
                 let palette = if light { pale } else { dark };

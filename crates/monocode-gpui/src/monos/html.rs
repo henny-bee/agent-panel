@@ -123,9 +123,9 @@ fn sandbox(body: &str) -> String {
             (value.b * 255.) as u8
         )
     };
-    let ink: gpui::Rgba = crate::theme::content(1.).into();
-    let foreground = color(crate::theme::content(1.));
-    let accent = color(crate::theme::accent_color());
+    let ink: gpui::Rgba = crate::ui::theme::content(1.).into();
+    let foreground = color(crate::ui::theme::content(1.));
+    let accent = color(crate::ui::theme::accent_color());
     let light = ink.r * 0.2126 + ink.g * 0.7152 + ink.b * 0.0722 < 0.5;
     let background = if light { "#fafafa" } else { "#141414" };
     let muted = if light { "#737373" } else { "#969696" };
@@ -153,8 +153,8 @@ impl Html {
     }
     #[cfg(target_os = "macos")]
     fn markup(&mut self) -> Arc<str> {
-        let ink = crate::theme::content(1.);
-        let accent = crate::theme::accent_color();
+        let ink = crate::ui::theme::content(1.);
+        let accent = crate::ui::theme::accent_color();
         if self
             .markup
             .as_ref()

@@ -1,7 +1,7 @@
 use crate::settings::SettingsView;
 use crate::{
-    settings::{SettingsEvent, management::Target, widgets::icon_action},
-    theme::*,
+    settings::{SettingsEvent, management::Target},
+    ui::{theme::*, widgets::icon_action},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 impl SettingsView {
@@ -33,7 +33,7 @@ impl SettingsView {
                         .debug_selector(|| "settings-mono-mascot".into())
                         .size(px(16.))
                         .flex_shrink_0()
-                        .child(crate::monos::avatar::avatar(
+                        .child(crate::ui::avatar::avatar(
                             &mono.mascot,
                             mono.color,
                             "idle",
@@ -93,7 +93,7 @@ impl SettingsView {
             );
         }
         if roster.is_empty() {
-            roster.push(super::super::widgets::note("No monos yet."));
+            roster.push(crate::ui::widgets::note("No monos yet."));
         }
         vec![self.group(None,true,"Monos",None,None,rows),self.group(Some("mono-list"),false,"Your monos",Some("Show or hide sessions started by each Mono. Hidden sessions remain available from the Mono's chat.".into()),None,roster)]
     }

@@ -300,7 +300,7 @@ fn default_variant(family: &Family) -> &Variant {
 pub(crate) fn model_value(
     raw: &Value,
     native: &str,
-    settings: &crate::agent::Settings,
+    settings: &crate::session::agent::Settings,
 ) -> (String, bool) {
     let families = model_families(raw);
     let effort = settings
@@ -427,8 +427,8 @@ fn effort_label(value: &str) -> &str {
         _ => value,
     }
 }
-pub(crate) fn catalog_models(raw: &Value) -> Vec<crate::catalog::Model> {
-    use crate::catalog::{Model, ModelControl};
+pub(crate) fn catalog_models(raw: &Value) -> Vec<crate::provider::catalog::Model> {
+    use crate::provider::catalog::{Model, ModelControl};
     let current = raw["configOptions"]
         .as_array()
         .into_iter()

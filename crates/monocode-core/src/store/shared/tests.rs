@@ -762,7 +762,7 @@ fn fresh_native_turn_receipts_persist_source_fields_without_changing_saved_prove
     let mut settings = store.agent_settings(session.id).unwrap().unwrap();
     settings.turns.insert(
         turn,
-        crate::agent::TurnInfo {
+        crate::session::agent::TurnInfo {
             provider: "codex".into(),
             model: "Chosen Model".into(),
             started_at: Some(100),
@@ -782,7 +782,7 @@ fn fresh_native_turn_receipts_persist_source_fields_without_changing_saved_prove
     receipt.duration_ms = 5000;
     receipt.duration_known = true;
     receipt.completed_at = Some(5100);
-    receipt.metrics = Some(crate::agent::TurnMetrics {
+    receipt.metrics = Some(crate::session::agent::TurnMetrics {
         input_tokens: 25,
         output_tokens: 10,
         ..Default::default()
@@ -832,7 +832,7 @@ fn fresh_receipt_preserves_the_matching_desktop_model_id_spelling() {
     let mut settings = store.agent_settings(id).unwrap().unwrap();
     settings.turns.insert(
         turn,
-        crate::agent::TurnInfo {
+        crate::session::agent::TurnInfo {
             provider: "claude".into(),
             model: "Sonnet 4.6".into(),
             model_id: Some("claude-sonnet-4-6".into()),

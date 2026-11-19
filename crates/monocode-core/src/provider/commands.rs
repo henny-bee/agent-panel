@@ -51,10 +51,10 @@ pub fn prepare_prompt(
 ) -> Result<String, String> {
     let text = native_prompt(kind, text);
     if matches!(kind, Kind::Omp | Kind::Devin) && text.trim_start().starts_with('/') {
-        crate::composer::validate_attachments(attachments)?;
+        crate::session::composer::validate_attachments(attachments)?;
         return Ok(text);
     }
-    crate::composer::prepare_prompt(&text, cwd, attachments)
+    crate::session::composer::prepare_prompt(&text, cwd, attachments)
 }
 
 pub(super) fn parse_commands(kind: Kind, rows: &Value) -> Vec<NativeCommand> {
