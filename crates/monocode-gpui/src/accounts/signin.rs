@@ -1,5 +1,5 @@
 use super::*;
-use crate::theme::*;
+use crate::ui::theme::*;
 use gpui::{AnyElement, FontWeight, Role, SharedString, div, px};
 
 impl Accounts {
@@ -130,10 +130,10 @@ impl Accounts {
                         d.cursor_pointer().hover(|s| s.bg(content(0.85)))
                     })
                     .when(running, |d| {
-                        d.child(crate::pulse::looping(
+                        d.child(crate::ui::motion::pulse::looping(
                             "footer-provider-auth-spinner",
                             std::time::Duration::from_secs(1),
-                            crate::pulse::Rate::Smooth,
+                            crate::ui::motion::pulse::Rate::Smooth,
                             move |delta| {
                                 icon("refresh-cw", 14.)
                                     .text_color(button_text)
@@ -222,7 +222,9 @@ mod tests {
             assert!(!accounts.has_modal_auth());
             accounts.signin.as_mut().unwrap().complete = true;
             assert!(!accounts.has_modal_auth());
-            assert!(!accounts.has_footer_auth(Kind::Codex, accounts::DEFAULT));
+            assert!(
+                !accounts.has_footer_auth(Kind::Codex, monocode_core::session::profile::DEFAULT)
+            );
             let _ = cx;
         });
     }
@@ -271,10 +273,22 @@ mod tests {
                     assert!(previous.is_focused(window));
                     assert!(!accounts.dialog_presented);
                     assert!(!accounts.has_modal_auth());
-                    assert!(accounts.has_footer_auth(Kind::Codex, accounts::DEFAULT));
-                    assert!(!accounts.has_footer_auth(Kind::Claude, accounts::DEFAULT));
+                    assert!(
+                        accounts
+                            .has_footer_auth(Kind::Codex, monocode_core::session::profile::DEFAULT)
+                    );
+                    assert!(
+                        !accounts.has_footer_auth(
+                            Kind::Claude,
+                            monocode_core::session::profile::DEFAULT
+                        )
+                    );
                     assert!(!accounts.has_footer_auth(Kind::Codex, "another-account"));
-                    let _ = accounts.footer_auth_panel(Kind::Codex, accounts::DEFAULT, cx);
+                    let _ = accounts.footer_auth_panel(
+                        Kind::Codex,
+                        monocode_core::session::profile::DEFAULT,
+                        cx,
+                    );
                 })
                 .unwrap();
         }
@@ -320,7 +334,9 @@ mod tests {
         cx.run_until_parked();
         view.update(cx, |accounts, _| {
             assert!(accounts.signin.is_none(), "an abandoned sign-in resets");
-            assert!(!accounts.has_footer_auth(Kind::Claude, accounts::DEFAULT));
+            assert!(
+                !accounts.has_footer_auth(Kind::Claude, monocode_core::session::profile::DEFAULT)
+            );
         });
         // A sign-in that finished while the user was away is left alone.
         view.update(cx, |accounts, cx| {

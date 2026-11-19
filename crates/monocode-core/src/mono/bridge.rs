@@ -289,7 +289,7 @@ fn configured(environment: &HashMap<String, String>) -> bool {
 
 /// Claude's stdio server entry for a Mono, or None without app access.
 pub fn mcp_server(
-    mono: Option<&crate::agent::MonoContext>,
+    mono: Option<&crate::session::agent::MonoContext>,
     environment: &HashMap<String, String>,
 ) -> Option<Value> {
     let mono = mono.filter(|_| configured(environment))?;
@@ -298,7 +298,7 @@ pub fn mcp_server(
 
 /// ACP's stdio server shape, which names the server and passes its env.
 pub fn acp_server(
-    mono: Option<&crate::agent::MonoContext>,
+    mono: Option<&crate::session::agent::MonoContext>,
     environment: &HashMap<String, String>,
 ) -> Option<Value> {
     let mut server = mcp_server(mono, environment)?;
@@ -314,7 +314,7 @@ pub fn acp_server(
 
 pub fn configure_codex(
     command: &mut std::process::Command,
-    mono: Option<&crate::agent::MonoContext>,
+    mono: Option<&crate::session::agent::MonoContext>,
     environment: &HashMap<String, String>,
 ) {
     let Some(server) = mcp_server(mono, environment) else {
@@ -455,7 +455,7 @@ mod capability_tests {
     }
     #[test]
     fn mcp_server_offers_one_app_tool_only_to_a_mono_with_app_access() {
-        let mono = crate::agent::MonoContext {
+        let mono = crate::session::agent::MonoContext {
             mono: Default::default(),
             root: "/monos".into(),
             executable: "/bin/monocode-gpui".into(),

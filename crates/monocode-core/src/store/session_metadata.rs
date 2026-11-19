@@ -1,6 +1,6 @@
 //! Small sidebar metadata can be gathered before the UI constructs chat entities.
 use super::Store;
-use crate::{agent::AccessMode, orchestration, session_groups};
+use crate::session::{agent::AccessMode, groups, orchestration};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -11,7 +11,7 @@ pub struct SessionSidebarMetadata {
     pub sidebar_hidden: HashSet<i64>,
     pub started_by: HashMap<i64, i64>,
     pub orchestrations: HashMap<i64, orchestration::Summary>,
-    pub groups: HashMap<String, session_groups::Groups>,
+    pub groups: HashMap<String, groups::Groups>,
     pub reminders: Vec<super::Reminder>,
 }
 

@@ -1,7 +1,7 @@
 //! React's command names, defaults, scopes, filter and shortcut recorder.
 use crate::{
-    settings::{Preferences, SettingsView},
-    theme::*,
+    settings::SettingsView,
+    ui::{preferences::Preferences, theme::*},
 };
 use gpui::{AnyElement, Context, FontWeight, Role, div, prelude::*, px};
 #[derive(Clone, Copy)]
@@ -443,7 +443,7 @@ impl SettingsView {
                 .into_any_element(),
         ];
         if rows.is_empty() {
-            children.push(super::super::widgets::note("No matching bindings"));
+            children.push(crate::ui::widgets::note("No matching bindings"));
         }
         for row in rows {
             let command = row.command;
@@ -502,7 +502,7 @@ impl SettingsView {
                                         content(0.15)
                                     })
                                     .px(px(6.))
-                                    .font_family(crate::fonts::mono())
+                                    .font_family(crate::ui::fonts::mono())
                                     .text_size(px(11.))
                                     .text_color(content(if disabled {
                                         0.35
@@ -549,7 +549,7 @@ impl SettingsView {
                             .w(px(112.))
                             .flex_shrink_0()
                             .truncate()
-                            .font_family(crate::fonts::mono())
+                            .font_family(crate::ui::fonts::mono())
                             .text_size(px(11.))
                             .text_color(content(0.4))
                             .child(row.when),

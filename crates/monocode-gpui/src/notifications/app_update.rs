@@ -1,9 +1,8 @@
 //! Installed-update card and bundled What's new content. The app updater itself
 //! is a separate backend concern; a successful installer records the marker.
 use crate::{
-    markdown::{self, MarkdownRow, Tone},
-    markdown_model,
-    theme::*,
+    chat::markdown::{self, MarkdownRow, Tone, model},
+    ui::theme::*,
 };
 use gpui::{Context, EventEmitter, FontWeight, Render, Role, Window, div, img, prelude::*, px};
 use monocode_core::store::Store;
@@ -218,7 +217,7 @@ impl EventEmitter<WhatsNewEvent> for WhatsNew {}
 impl WhatsNew {
     pub(crate) fn set_release_notes(&mut self, body: &str, cx: &mut Context<Self>) {
         if !body.trim().is_empty() {
-            self.rows = markdown_model::parse_full(body)
+            self.rows = model::parse_full(body)
                 .blocks
                 .iter()
                 .flat_map(|b| markdown::rows(&b.block))
@@ -231,7 +230,7 @@ impl WhatsNew {
         let date = notes.as_ref().and_then(|n| n.date.clone());
         let rows = notes
             .map(|notes| {
-                markdown_model::parse_full(&notes.markdown)
+                model::parse_full(&notes.markdown)
                     .blocks
                     .iter()
                     .flat_map(|b| markdown::rows(&b.block))

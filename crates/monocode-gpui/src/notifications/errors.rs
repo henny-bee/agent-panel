@@ -1,5 +1,5 @@
 //! Dismissible app errors use the same glass card as pending approvals.
-use crate::theme::*;
+use crate::ui::theme::*;
 use gpui::{Div, FontWeight, Hsla, Role, Stateful, div, prelude::*, px, rgb};
 
 pub(crate) fn card(id: &'static str, message: String, dismiss: impl IntoElement) -> Stateful<Div> {

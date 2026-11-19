@@ -1,6 +1,6 @@
 //! Lossless desktop block adaptation. Unknown fields and non-displayed blocks
 //! stay in the source document when native rows are appended or edited.
-use crate::{
+use crate::session::{
     tool::{tasks, ToolCall, ToolState},
     transcript::{Row, Transcript},
 };
@@ -127,7 +127,7 @@ fn project_content(block: &Value) -> Result<Vec<Row>, String> {
     let text = block["text"].as_str().unwrap_or("");
     let mut t = Transcript::default();
     if block["interjection"].is_object() {
-        let note = crate::transcript::Interjection {
+        let note = crate::session::transcript::Interjection {
             text: text.into(),
             custom_type: block["interjection"]["customType"]
                 .as_str()
@@ -193,7 +193,7 @@ fn project_block(block: &Value) -> Result<Vec<Row>, String> {
                 .is_some_and(|files| !files.is_empty()))
     {
         rows.push(metadata_row(
-            crate::transcript::attachments::ROLE,
+            crate::session::transcript::attachments::ROLE,
             &block["attachments"],
         ));
     }
@@ -244,7 +244,7 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         }
     }
     if role == "interjection" {
-        let note: crate::transcript::Interjection = super::parse(&text)?;
+        let note: crate::session::transcript::Interjection = super::parse(&text)?;
         block["role"] = json!("system");
         block["text"] = json!(note.text);
         block["interjection"] = json!({"customType":note.custom_type});
@@ -493,7 +493,7 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
                     "mono-document"
                         | "mono-note"
                         | "mono-launch"
-                        | crate::transcript::attachments::ROLE
+                        | crate::session::transcript::attachments::ROLE
                 ) {
                     value = update(Some(&value), group)?;
                 } else {
@@ -511,7 +511,7 @@ pub(super) fn merge(blocks: &[Value], start: usize, delta: &[Row]) -> Result<Vec
         if offset < original_len {
             return Err("Invalid transcript update".into());
         }
-        if rows[0].role == crate::transcript::attachments::ROLE {
+        if rows[0].role == crate::session::transcript::attachments::ROLE {
             let prompt = result
                 .last_mut()
                 .filter(|block| block["role"] == "user")
@@ -557,10 +557,10 @@ mod notice_tests {
 #[cfg(test)]
 mod panel_tests {
     use super::*;
-    use crate::tool::tasks::{AgentRun, AgentStep, Panel, TaskList};
+    use crate::session::tool::tasks::{AgentRun, AgentStep, Panel, TaskList};
     #[test]
     fn native_visuals_survive_chunking_storage_and_later_messages() {
-        let document = crate::visual::VisualDocument {
+        let document = crate::session::visual::VisualDocument {
             id: "visual-plot".into(),
             title: "Results 🙂".into(),
             source: format!(
@@ -577,7 +577,7 @@ mod panel_tests {
         assert_eq!(saved[0]["role"], "visual");
         let rows = project(&saved).unwrap();
         assert_eq!(rows, transcript.rows);
-        let loaded: crate::visual::VisualDocument =
+        let loaded: crate::session::visual::VisualDocument =
             serde_json::from_str(&rows.iter().map(|row| row.text.as_str()).collect::<String>())
                 .unwrap();
         assert_eq!(loaded.source, document.source);

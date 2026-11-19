@@ -1,7 +1,7 @@
 //! Code contributions per session, kept in the native sidecar so the shared
 //! desktop schema is untouched. A commit or pull request is recorded once.
 use super::Store;
-use crate::contributions::{Contribution, Kind};
+use crate::session::contributions::{Contribution, Kind};
 use rusqlite::{params, Connection};
 
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS contributions(
@@ -196,21 +196,21 @@ mod tests {
         let legacy = Store::open(std::path::Path::new(":memory:")).unwrap();
         for mut store in [shared, legacy] {
             let id = store.create("codex", "/tmp").unwrap().id;
-            let mut tool = crate::tool::ToolCall::new("t", "Bash");
+            let mut tool = crate::session::tool::ToolCall::new("t", "Bash");
             tool.input = serde_json::json!({"command": "git commit -m x"}).to_string();
-            tool.state = crate::tool::ToolState::Completed;
+            tool.state = crate::session::tool::ToolState::Completed;
             store
                 .write_rows(
                     id,
                     0,
                     &[
-                        crate::transcript::Row {
+                        crate::session::transcript::Row {
                             role: "user".into(),
                             text: "Commit it".into(),
                             first: true,
                             sent_at: None,
                         },
-                        crate::transcript::Row {
+                        crate::session::transcript::Row {
                             role: "tool".into(),
                             text: serde_json::to_string(&tool).unwrap(),
                             first: true,

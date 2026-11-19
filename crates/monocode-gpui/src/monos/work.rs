@@ -6,7 +6,7 @@ pub(super) struct Cache {
     revisions: HashMap<String, Revision>,
     pending: HashSet<String>,
     checked: HashMap<String, std::time::Instant>,
-    pub(super) documents: HashMap<String, mono::Document>,
+    pub(super) documents: HashMap<String, monocode_core::session::mono_model::Document>,
     pub(super) loading_documents: HashSet<String>,
 }
 /// Whether `id` is a document `mono`'s chat projection carries whole, rather

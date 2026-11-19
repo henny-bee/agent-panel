@@ -6,7 +6,7 @@ fn main() -> Result<(), String> {
     let kind = Kind::parse(&name).ok_or_else(|| format!("Unknown provider: {name}"))?;
     let binary = provider::resolve(kind).ok_or("CLI not installed")?;
     if std::env::args().nth(2).as_deref() == Some("--models") {
-        for model in monocode_core::catalog::models(kind)? {
+        for model in monocode_core::provider::catalog::models(kind)? {
             println!(
                 "{} | {} | {:?} | fast={}",
                 model.id, model.name, model.efforts, model.fast
@@ -88,7 +88,7 @@ fn inspect(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
     provider::run(Request {
         kind, binary, cwd: std::env::current_dir().map_err(|e| e.to_string())?,
         prompt: "Inspect this repository using git status --short and git diff --stat. Do not change any files. Send one brief progress message before running the tools, then report the current changes in Markdown with two headings, bullets, inline code, and a small fenced Rust example. Keep the final explanation between 150 and 220 words. Use the actual tools; do not ask me to paste output.".into(),
-        provider_id: None, model: None, settings: monocode_core::agent::Settings { access: monocode_core::agent::AccessMode::ReadOnly, ..Default::default() },
+        provider_id: None, model: None, settings: monocode_core::session::agent::Settings { access: monocode_core::session::agent::AccessMode::ReadOnly, ..Default::default() },
     }, Arc::new(AtomicBool::new(false)), |events| {
         for event in events {
             match event {
@@ -126,7 +126,7 @@ fn read_only(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
         kind,binary,cwd:cwd.clone(),provider_id:None,
         model:std::env::var(format!("MONOCODE_{}_MODEL",kind.id().to_uppercase())).ok(),
         prompt:"Try to create permission-check.txt with the word WRITE in the current directory using a file tool. If your current permission mode prohibits edits, explain that briefly and finish without requesting a mode change. Do not run shell commands.".into(),
-        settings:monocode_core::agent::Settings {access:monocode_core::agent::AccessMode::ReadOnly,..Default::default()},
+        settings:monocode_core::session::agent::Settings {access:monocode_core::session::agent::AccessMode::ReadOnly,..Default::default()},
     },Arc::new(AtomicBool::new(false)),|events| {
         for event in events { match event { Event::Text(text)=>print!("{text}"),Event::Done=>done=true,_=>{} } }
         Ok(())
@@ -141,7 +141,7 @@ fn read_only(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
     Ok(())
 }
 fn approval(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
-    use monocode_core::agent::{AccessMode, Control, Decision, Settings};
+    use monocode_core::session::agent::{AccessMode, Control, Decision, Settings};
     let cwd = std::env::temp_dir().join(format!(
         "monocode-permissions-{}-{}",
         kind.id(),
@@ -151,7 +151,7 @@ fn approval(kind: Kind, binary: std::path::PathBuf) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut asked = 0;
     let mut completed = false;
-    let models = monocode_core::catalog::models(kind)?;
+    let models = monocode_core::provider::catalog::models(kind)?;
     let model = std::env::var(format!("MONOCODE_{}_MODEL", kind.id().to_uppercase()))
         .ok()
         .or_else(|| {

@@ -1,5 +1,5 @@
 //! Stationary notification glass, matching GlassBackdrop and the native popover.
-use crate::theme::*;
+use crate::ui::theme::*;
 use gpui::{Div, canvas, div, prelude::*, px};
 
 pub(crate) fn backdrop(radius: f32) -> impl IntoElement {

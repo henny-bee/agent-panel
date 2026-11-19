@@ -1,10 +1,10 @@
 //! GeneralPage and UpdateRow.
 use crate::notifications::updater::{self, Action};
-use crate::settings::{
-    SettingsView,
-    widgets::{primary_button, secondary_button},
+use crate::ui::theme::*;
+use crate::{
+    settings::SettingsView,
+    ui::widgets::{primary_button, secondary_button},
 };
-use crate::theme::*;
 use gpui::{AnyElement, Context, FontWeight, div, prelude::*, px};
 
 impl SettingsView {
@@ -110,7 +110,7 @@ impl SettingsView {
                     "Press {} from any app. Return starts a session in the background; ⌘Return opens it. Change the shortcut in Keybindings.",
                     super::keybindings::quick_composer_label(&p)
                 ).into()),
-                {let mut controls=Vec::new();if let Some(error)=&self.ctx.quick_error{controls.push(super::super::widgets::note(error.clone()));}controls.push(self.toggle(
+                {let mut controls=Vec::new();if let Some(error)=&self.ctx.quick_error{controls.push(crate::ui::widgets::note(error.clone()));}controls.push(self.toggle(
                     "quick-composer",
                     "Quick composer",
                     p.quick_composer,
@@ -209,7 +209,7 @@ impl SettingsView {
                     .child("Version")
                     .child(
                         div()
-                            .font_family(crate::fonts::mono())
+                            .font_family(crate::ui::fonts::mono())
                             .text_size(px(12.))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(content(0.45))

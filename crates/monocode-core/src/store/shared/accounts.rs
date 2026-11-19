@@ -1,5 +1,8 @@
 use super::*;
-use crate::accounts::{Account, Book, DesktopOverrides, DEFAULT};
+use crate::{
+    provider::accounts::{Account, Book, DesktopOverrides},
+    session::profile::DEFAULT,
+};
 
 impl Store {
     fn shared_desktop_accounts(&self) -> Option<Book> {
@@ -48,7 +51,7 @@ impl Store {
                 }
                 ids.sort();
                 for id in ids {
-                    if crate::accounts::validate_id(&id).is_ok()
+                    if crate::provider::accounts::validate_id(&id).is_ok()
                         && id != DEFAULT
                         && !book
                             .accounts

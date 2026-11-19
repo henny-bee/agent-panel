@@ -1,6 +1,6 @@
 //! The shared question contract and each provider's original reply shape.
 use super::*;
-use crate::agent::{Question, QuestionItem, QuestionOption};
+use crate::session::agent::{Question, QuestionItem, QuestionOption};
 impl Protocol {
     pub(super) fn question(
         &mut self,
@@ -175,7 +175,7 @@ impl Protocol {
                 continue;
             };
             if request["isBlocking"] == false || kind == "codex-async" {
-                question.auto_resolve_at = Some(crate::time::now_ms().saturating_add(120_000));
+                question.auto_resolve_at = Some(crate::sys::time::now_ms().saturating_add(120_000));
             }
             self.visible_question = Some(id);
             return vec![Event::Question(question.clone())];
@@ -192,7 +192,7 @@ impl Protocol {
             self.questions
                 .get(id)
                 .and_then(|(_, _, _, q)| q.auto_resolve_at)
-                .filter(|at| *at <= crate::time::now_ms())
+                .filter(|at| *at <= crate::sys::time::now_ms())
                 .map(|_| id.clone())
         });
         if let Some(id) = expired {

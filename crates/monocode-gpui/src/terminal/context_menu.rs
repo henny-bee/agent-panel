@@ -1,5 +1,5 @@
 use super::*;
-use crate::popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover};
+use crate::ui::popover::{Anchor, Menu, MenuAction, MenuEvent, menu_popover};
 
 pub(super) struct EditingMenu {
     menu: Entity<Menu>,
@@ -15,7 +15,7 @@ impl Terminal {
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "macos")]
-        crate::traffic_lights::focus_content(window);
+        crate::ui::traffic_lights::focus_content(window);
         self.stop_selection();
         self.pressed_link = None;
         window.focus(&self.focus, cx);
@@ -42,7 +42,7 @@ impl Terminal {
                 .shortcut(format!("{modifier}V"))
                 .disabled(!clipboard || self.exited)
                 .into(),
-            crate::popover::MenuItem::Separator,
+            crate::ui::popover::MenuItem::Separator,
             MenuAction::new("select-all", "Select All")
                 .shortcut(format!("{modifier}A"))
                 .into(),
@@ -85,7 +85,7 @@ mod tests {
     fn terminal_context_menu_copies_selection_and_restores_focus(cx: &mut gpui::TestAppContext) {
         let window = cx.update(|cx| {
             super::super::bind(cx);
-            crate::popover::bind(cx);
+            crate::ui::popover::bind(cx);
             cx.open_window(Default::default(), |_, cx| {
                 cx.new(|cx| Terminal::new("/tmp".into(), cx))
             })

@@ -1,7 +1,7 @@
 //! Settings discovery runs on a worker; rendering never probes CLIs or Git.
 use monocode_core::{
-    git,
     provider::{self, Kind},
+    vcs::git,
 };
 use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
@@ -52,7 +52,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
             .collect(),
         ..Default::default()
     };
-    data.skills = monocode_core::skills::list_skills(cwd.into(), None)
+    data.skills = monocode_core::provider::skills::list_skills(cwd.into(), None)
         .unwrap_or_default()
         .into_iter()
         .map(|s| {
@@ -67,7 +67,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
             }
         })
         .collect();
-    match monocode_core::mcp::mcp_discover(cwd.into()) {
+    match monocode_core::provider::mcp::mcp_discover(cwd.into()) {
         Ok(servers) => {
             data.mcp = servers
                 .into_iter()
@@ -89,7 +89,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                 if let Some(main) = s.worktrees.first() {
                     data.worktrees.main = main.path.clone();
                     data.worktrees.default_root =
-                        monocode_core::worktree_management::default_root(Path::new(&main.path));
+                        monocode_core::vcs::worktrees::default_root(Path::new(&main.path));
                 }
                 data.worktrees.branches = s.branches;
                 data.worktrees.trees = s
@@ -97,8 +97,7 @@ pub(super) fn discover(cwd: &str) -> Discovery {
                     .into_iter()
                     .filter(|t| !t.main)
                     .map(|tree| {
-                        let status =
-                            monocode_core::worktree_management::status(Path::new(cwd), &tree);
+                        let status = monocode_core::vcs::worktrees::status(Path::new(cwd), &tree);
                         Tree {
                             tree,
                             locked: status.0,

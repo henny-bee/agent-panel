@@ -1,8 +1,7 @@
 //! SkillsPage's independently scrolling document, without chat alignment or fades.
 use crate::{
-    markdown::{self, MarkdownRow, Part, Tone},
-    markdown_model,
-    theme::*,
+    chat::markdown::{self, MarkdownRow, Part, Tone, model},
+    ui::theme::*,
 };
 use gpui::{
     AnyElement, Context, ListAlignment, ListState, Render, Role, SharedString, Window, div, list,
@@ -19,7 +18,7 @@ impl DocumentData {
     /// Run on the file-reading worker, once per selected file.
     pub fn new(text: String) -> Arc<Self> {
         let (metadata, body) = frontmatter(&text);
-        let rows = markdown_model::parse_full(body)
+        let rows = model::parse_full(body)
             .blocks
             .iter()
             .flat_map(|block| markdown::rows(&block.block))
@@ -82,7 +81,7 @@ impl SkillDocument {
                 .collect();
             return frame
                 .pt(px(if ix == 0 { 12. } else { 0. }))
-                .font_family(crate::fonts::mono())
+                .font_family(crate::ui::fonts::mono())
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .text_color(content(0.85))
@@ -138,7 +137,7 @@ impl SkillDocument {
                                     .py_2()
                                     .border_t_1()
                                     .border_color(content(0.1))
-                                    .font_family(crate::fonts::mono())
+                                    .font_family(crate::ui::fonts::mono())
                                     .text_size(px(12.))
                                     .line_height(px(20.))
                                     .text_color(content(0.7))

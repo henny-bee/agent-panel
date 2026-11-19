@@ -105,10 +105,10 @@ pub fn validate(action: &str, input: &Value) -> Result<(), String> {
     }
     if input.get("tags").is_some_and(|v| {
         v.as_array().is_none_or(|a| {
-            a.len() > crate::notes::MAX_TAGS
+            a.len() > crate::session::notes::MAX_TAGS
                 || a.iter().any(|v| {
                     v.as_str()
-                        .is_none_or(|s| s.len() > crate::notes::MAX_TAG_LENGTH)
+                        .is_none_or(|s| s.len() > crate::session::notes::MAX_TAG_LENGTH)
                 })
         })
     }) {

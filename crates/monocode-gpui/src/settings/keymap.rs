@@ -1,6 +1,6 @@
 //! Rebuild overrides from the original native keymap, preserving each action's
 //! focus predicate. Resetting restores defaults without accumulating bindings.
-use super::Preferences;
+use crate::ui::preferences::Preferences;
 use gpui::{App, Global, KeyBinding};
 use std::collections::{HashMap, HashSet};
 struct Defaults {

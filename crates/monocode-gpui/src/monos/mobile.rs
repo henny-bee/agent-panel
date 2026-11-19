@@ -4,11 +4,11 @@
 //! and its soul and memory as Markdown (`mono.file`, `mono.saveFile`).
 use super::dashboard::{Day, levels, local_day, streak};
 use super::*;
-use crate::shell::monos::MonoSession;
+use crate::monos::MonoSession;
 use chrono::{DateTime, Local};
 use monocode_core::mono::files;
-use monocode_core::project_appearance::MASCOTS;
-use monocode_core::time::{now_ms, relative};
+use monocode_core::project::appearance::MASCOTS;
+use monocode_core::sys::time::{now_ms, relative};
 use serde_json::{Value, json};
 
 impl Monos {
@@ -221,7 +221,7 @@ impl Monos {
             mono.subsessions = if value.is_null() {
                 None
             } else {
-                let mut next: monocode_core::mono::Subsessions =
+                let mut next: monocode_core::session::mono_model::Subsessions =
                     serde_json::from_value(value.clone()).map_err(|_| "Unknown model")?;
                 let kind = match next.harness.as_deref() {
                     Some(harness) => Some(Kind::parse(harness).ok_or("Unknown provider")?),

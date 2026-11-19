@@ -1,6 +1,6 @@
 //! App.tsx / handoffTurn.ts's bounded recap from the outgoing bound provider.
 use super::*;
-use monocode_core::agent::{AccessMode, Decision, Handoff, ProviderSwitch};
+use monocode_core::session::agent::{AccessMode, Decision, Handoff, ProviderSwitch};
 use std::{path::Path, sync::mpsc, time::Instant};
 
 pub(super) fn prepare(
@@ -21,7 +21,7 @@ pub(super) fn prepare(
     let mut brief = String::new();
     let mut binding = source.provider_id.clone();
     let has_edits = rows.iter().filter(|row| row.role == "tool").any(|row| {
-        serde_json::from_str::<monocode_core::tool::ToolCall>(&row.text)
+        serde_json::from_str::<monocode_core::session::tool::ToolCall>(&row.text)
             .ok()
             .is_some_and(|tool| {
                 matches!(
@@ -55,14 +55,14 @@ pub(super) fn prepare(
             }
         });
         let mut account = source.account.clone();
-        if account.id != monocode_core::accounts::DEFAULT && account.root.is_none() {
+        if account.id != monocode_core::session::profile::DEFAULT && account.root.is_none() {
             account.root = root;
         }
         let request = Request {
             kind,
             binary,
             cwd: cwd.into(),
-            prompt: monocode_core::response::outgoing_handoff_prompt(user_request),
+            prompt: monocode_core::session::response::outgoing_handoff_prompt(user_request),
             provider_id: source.provider_id.clone(),
             model: source.model.clone(),
             settings: Settings {
@@ -78,7 +78,7 @@ pub(super) fn prepare(
             },
         };
         let (controls, control_rx) = mpsc::channel();
-        let _ = monocode_core::process::owned_by(session, || {
+        let _ = monocode_core::sys::process::owned_by(session, || {
             provider::run_with_controls(request, cancel, Some(control_rx), |events| {
                 for event in events {
                     match event {
@@ -124,6 +124,6 @@ pub(super) fn prepare(
     }
     Handoff {
         from: source.from.clone(),
-        brief: monocode_core::response::choose_handoff_brief(&brief, rows),
+        brief: monocode_core::session::response::choose_handoff_brief(&brief, rows),
     }
 }

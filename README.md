@@ -43,7 +43,9 @@ The panels update the moment Claude writes to its chat log, without polling ever
 
 - Each split pane can open its own project panel, with its own tab, width and Git status.
 - A folder box at the top of the Explorer shows any folder you type or pick, in place of the chat's own folder.
+- Click the branch name at the top of **Changes** to switch branch. The list can be searched, shows local and remote branches, and creates a branch when you type a new name.
 - A **Graph** section under **Changes** shows the commit history, like VS Code's Source Control graph. Drag the divider to resize it.
+- The **CODE** tab next to **GRAPH** shows the project's languages, like GitHub's Languages bar. It counts the size of tracked and new files, and skips vendored code, docs and minified files.
 - Opening a changed file from **Changes** is fast on Windows too. It used to take over 10 seconds there.
 - Opening the app again adds a window to the running app. Windows share live sessions, so a Claude CLI runs once however many windows show it.
 - The chevron next to the new-tab button starts a session on a model you pick.
@@ -132,7 +134,7 @@ The program file (`monocode-gpui`), the code folders and the data folders keep t
 - [Remote sessions, experimental](docs/remote-access.md)
 - [Changelog](CHANGELOG.md)
 
-The mobile companion app is a separate Expo project in [`mobile/`](mobile/README.md). The `host/` folder holds the service that runs [remote sessions](docs/remote-access.md) on another machine. Both come from Monocode.
+The mobile companion app, from Monocode, is a separate Expo project in [`mobile/`](mobile/README.md).
 
 ## Contributing
 

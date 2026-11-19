@@ -52,7 +52,7 @@ impl PendingSave {
         store: &Database,
         session: i64,
         transcript: &Transcript,
-        context: &monocode_core::context::Usage,
+        context: &monocode_core::session::context::Usage,
         now: Instant,
     ) -> Result<(), String> {
         if self.from.is_none() && !self.context_dirty {
@@ -111,7 +111,7 @@ pub(super) fn save_turn_receipt(
     store: &Database,
     session: i64,
     turn: usize,
-    info: monocode_core::agent::TurnInfo,
+    info: monocode_core::session::agent::TurnInfo,
 ) -> Result<(), String> {
     let store = locked(store)?;
     // The picker/composer may have changed during the run. Update only its
@@ -124,7 +124,7 @@ pub(super) fn save_turn_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monocode_core::follow_up::{Message, State};
+    use monocode_core::session::follow_up::{Message, State};
 
     fn conversation() -> (Database, i64, Transcript) {
         let mut store = Store::open_monocode(std::path::Path::new(":memory:")).unwrap();
@@ -227,7 +227,7 @@ mod tests {
             &store,
             id,
             1,
-            monocode_core::agent::TurnInfo {
+            monocode_core::session::agent::TurnInfo {
                 provider: "codex".into(),
                 model: "Turn Model".into(),
                 model_id: Some("turn-model".into()),
@@ -236,7 +236,7 @@ mod tests {
                 duration_ms: 9000,
                 duration_known: true,
                 completed_at: Some(started_at + 9000),
-                metrics: Some(monocode_core::agent::TurnMetrics {
+                metrics: Some(monocode_core::session::agent::TurnMetrics {
                     output_tokens: 5,
                     ..Default::default()
                 }),

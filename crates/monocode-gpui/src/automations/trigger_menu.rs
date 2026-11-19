@@ -2,7 +2,7 @@
 //! Connection state comes from the retained Inbox snapshot; opening this menu
 //! never authenticates a provider or performs a network request.
 use super::*;
-use crate::popover::{Menu, MenuAction, MenuEvent, MenuItem, Popover, menu_popover};
+use crate::ui::popover::{Menu, MenuAction, MenuEvent, MenuItem, Popover, menu_popover};
 
 const CATEGORIES: [(&str, &str, &str); 6] = [
     ("time", "Scheduled", "clock"),

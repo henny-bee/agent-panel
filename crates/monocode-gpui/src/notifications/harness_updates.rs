@@ -1,9 +1,9 @@
 //! Native counterpart of HarnessUpdateNotice.tsx. The parent positions this
 //! entity in the shared top-right notification stack.
-use crate::theme::*;
+use crate::ui::theme::*;
 use gpui::{Context, EventEmitter, Render, Role, Window, div, prelude::*, px};
 use monocode_core::{
-    harness_updates::{self, Update},
+    integrations::harness_updates::{self, Update},
     provider::Kind,
 };
 use std::collections::HashMap;
@@ -245,10 +245,10 @@ impl Render for HarnessUpdates {
                             .items_center()
                             .gap(px(6.))
                             .when(updating, |el| {
-                                el.child(crate::pulse::looping(
+                                el.child(crate::ui::motion::pulse::looping(
                                     "harness-update-spinner",
                                     std::time::Duration::from_secs(1),
-                                    crate::pulse::Rate::Smooth,
+                                    crate::ui::motion::pulse::Rate::Smooth,
                                     move |delta| {
                                         icon("loader", 12.).with_transformation(
                                             gpui::Transformation::rotate(gpui::percentage(delta)),

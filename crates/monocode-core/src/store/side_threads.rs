@@ -3,7 +3,7 @@
 use super::{shared, Store};
 use crate::{
     provider::Kind,
-    transcript::{Row, Transcript},
+    session::transcript::{Row, Transcript},
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};

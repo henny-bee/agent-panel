@@ -1,9 +1,10 @@
 use crate::{
-    settings::{
-        ModelChoice, SettingsView,
+    settings::SettingsView,
+    ui::{
+        preferences::ModelChoice,
+        theme::*,
         widgets::{note, secondary_button},
     },
-    theme::*,
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use monocode_core::provider::Kind;
@@ -14,7 +15,7 @@ impl SettingsView {
             center.update(cx, |center, cx| {
                 center.mask_emails = p.mask_emails;
                 center.show_remaining = p.show_remaining_usage;
-                for kind in monocode_core::accounts::PROVIDERS {
+                for kind in monocode_core::provider::accounts::PROVIDERS {
                     center.load_provider(kind, false, cx);
                 }
                 center.settings_rows(cx)
@@ -282,7 +283,7 @@ impl SettingsView {
         )];
         for kind in Kind::ALL {
             let installed = binaries.iter().any(|(k, p)| *k == kind && p.is_some());
-            if !installed || !monocode_core::session_title::supports(kind) {
+            if !installed || !monocode_core::session::title::supports(kind) {
                 continue;
             }
             match self.ctx.catalogs.get(kind.id()).filter(|m| !m.is_empty()) {

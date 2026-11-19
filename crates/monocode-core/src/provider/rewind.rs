@@ -101,7 +101,10 @@ fn claude_prompt_text(entry: &Value) -> Option<String> {
 }
 
 /// Where Claude keeps a session. It saves one only once it holds a message.
-pub fn claude_transcript(account: &crate::accounts::Profile, session: &str) -> Option<PathBuf> {
+pub fn claude_transcript(
+    account: &crate::session::profile::Profile,
+    session: &str,
+) -> Option<PathBuf> {
     let name = format!("{session}.jsonl");
     std::fs::read_dir(account.home(Kind::Claude).ok()?.join("projects"))
         .ok()?
@@ -114,7 +117,7 @@ pub fn claude_transcript(account: &crate::accounts::Profile, session: &str) -> O
 /// inside it move it away from the id it was started with.
 // shortcut: reads Claude Code's own undocumented `sessions/<pid>.json`; if a
 // release drops that file this returns None and the caller keeps the id it has.
-pub fn claude_live_session(account: &crate::accounts::Profile, pid: u32) -> Option<String> {
+pub fn claude_live_session(account: &crate::session::profile::Profile, pid: u32) -> Option<String> {
     let record = account
         .home(Kind::Claude)
         .ok()?
@@ -134,7 +137,10 @@ pub fn claude_live_session(account: &crate::accounts::Profile, pid: u32) -> Opti
 
 /// The first message the user sent in a Claude session, to name it. Slash
 /// commands and their output are stored as tagged text and are skipped.
-pub fn claude_first_prompt(account: &crate::accounts::Profile, session: &str) -> Option<String> {
+pub fn claude_first_prompt(
+    account: &crate::session::profile::Profile,
+    session: &str,
+) -> Option<String> {
     std::fs::read_to_string(claude_transcript(account, session)?)
         .ok()?
         .lines()
@@ -219,7 +225,7 @@ fn claude_rewind(request: &Request) -> Result<String, RewindError> {
     // The warm process still holds the turn about to be dropped.
     parked::discard_session(request);
     let mut command = Command::new(&request.binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(Kind::Claude, &mut command)?;
     command.args([
@@ -295,7 +301,7 @@ pub fn rewind_last_turn(
     // It must not later resume with a pre-revert in-memory context.
     parked::discard_session(&request);
     let mut command = Command::new(&request.binary);
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(request.kind, &mut command)?;
     if request.kind == Kind::Codex {
@@ -443,7 +449,7 @@ impl Rpc<'_> {
                     {
                         write_json(
                             &mut self.wire.stdin,
-                            json!({"id":value["id"],"result":{"currentTimeAt":crate::time::now_ms()/1000}}),
+                            json!({"id":value["id"],"result":{"currentTimeAt":crate::sys::time::now_ms()/1000}}),
                         )?;
                         continue;
                     }
@@ -511,7 +517,7 @@ mod tests {
     #[test]
     fn claude_live_session_follows_the_record_the_cli_keeps_for_its_process() {
         let root = tempfile::tempdir().unwrap();
-        let account = crate::accounts::Profile {
+        let account = crate::session::profile::Profile {
             id: "work".into(),
             root: Some(root.path().to_owned()),
         };

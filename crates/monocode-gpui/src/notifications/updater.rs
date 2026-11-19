@@ -1,10 +1,10 @@
 //! Shared app updater: one check/install across windows; no I/O on the UI thread.
 use crate::{
     runtime::{Database, locked},
-    theme::*,
+    ui::theme::*,
 };
 use gpui::{App, Context, Entity, EventEmitter, Global, Role, div, prelude::*, px};
-use monocode_core::app_update::{self, Config, Installation, Installed, Update};
+use monocode_core::integrations::app_update::{self, Config, Installation, Installed, Update};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -338,10 +338,10 @@ pub(crate) fn row(entity: Entity<Updater>, cx: &App) -> gpui::AnyElement {
         state.progress_label()
     };
     let glyph = if state.busy() {
-        crate::pulse::looping(
+        crate::ui::motion::pulse::looping(
             "native-update-spin",
             Duration::from_secs(1),
-            crate::pulse::Rate::Smooth,
+            crate::ui::motion::pulse::Rate::Smooth,
             |turn| {
                 icon("loader", 16.)
                     .text_color(content(0.7))

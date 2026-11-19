@@ -1,8 +1,8 @@
 # Native architecture
 
-The GPUI app is an experimental preview alongside the production React/Tauri
-app. The existing implementation in `src/` and `src-tauri/` is the behavior
-reference. Production builds, CI, releases and updater feeds continue to use Tauri.
+The GPUI app began in Monocode as a preview alongside its React/Tauri app, which
+served as its behavior reference. MCode keeps only the GPUI app. What remains of
+the React code in `src/` is used only by the asset generators in `scripts/`.
 
 ## Code layout
 
@@ -14,6 +14,7 @@ reference. Production builds, CI, releases and updater feeds continue to use Tau
 | `scripts/dev-native.mjs` | Development build and manual restart runner |
 | `scripts/build-native.mjs` | Optimized build and macOS packaging |
 | `scripts/native-editor/`, `scripts/native-settings/` | Generators for embedded JavaScript assets |
+| `src/` | TypeScript from Monocode's React app, still imported by those generators |
 | `vendor/gpui-pre*/` | Pinned framework and platform patches |
 
 `monocode-core` has no Tauri or GPUI dependency. Keep provider and storage

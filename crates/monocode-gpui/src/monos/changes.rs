@@ -1,7 +1,7 @@
 //! MonoChangesView: assigned-project tabs with a retained commit/review surface
 //! per checkout. Only the selected checkout owns a live Git poller.
 use super::*;
-use crate::popover::{MenuAction, MenuItem};
+use crate::ui::popover::{MenuAction, MenuItem};
 use std::{path::Path, time::Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,9 +36,9 @@ struct Summary {
     revision: u64,
 }
 struct Surface {
-    git: Entity<crate::git_status::ProjectGit>,
-    changes: Entity<crate::changes::Changes>,
-    review: Option<Entity<crate::review::ReviewPane>>,
+    git: Entity<crate::runtime::git_status::ProjectGit>,
+    changes: Entity<crate::git::changes::Changes>,
+    review: Option<Entity<crate::git::review::ReviewPane>>,
     enabled: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -124,7 +124,7 @@ fn repository(path: &Path) -> Option<(String, String)> {
 
 fn group_files(
     attached: &[String],
-    files: &[monocode_core::checkpoint::CheckpointFile],
+    files: &[monocode_core::vcs::checkpoint::CheckpointFile],
     previous: &[Project],
     mut locate: impl FnMut(&Path) -> Option<(String, String)>,
 ) -> Vec<Project> {
@@ -258,7 +258,7 @@ impl Monos {
         let work_source = source.clone();
         let database = self.store.clone();
         let work = cx.background_executor().spawn(async move {
-            let files = match (work_source.session, monocode_core::checkpoint::store()) {
+            let files = match (work_source.session, monocode_core::vcs::checkpoint::store()) {
                 (Some(session), Some(store))
                     if !work_source.cwd.is_empty() && work_source.cwd != "~" =>
                 {
@@ -340,24 +340,24 @@ impl Monos {
             }
         }
         if !self.project_changes.surfaces.contains_key(&key) {
-            let git = cx.new(|cx| crate::git_status::ProjectGit::new(root, cx));
+            let git = cx.new(|cx| crate::runtime::git_status::ProjectGit::new(root, cx));
             let provider = self
                 .chat()
                 .map(|v| Kind::from_id(&v.read(cx).summary.provider))
                 .unwrap_or(Kind::Codex);
             let changes = cx.new(|cx| {
-                let mut view = crate::changes::Changes::new(git.clone(), window, cx);
+                let mut view = crate::git::changes::Changes::new(git.clone(), window, cx);
                 view.text_provider = provider;
                 view
             });
             let event_key = key.clone();
             let changes_event = cx.subscribe(
                 &changes,
-                move |this, view, event: &crate::changes::ChangesEvent, cx| match event {
-                    crate::changes::ChangesEvent::View(mode) => {
+                move |this, view, event: &crate::git::changes::ChangesEvent, cx| match event {
+                    crate::git::changes::ChangesEvent::View(mode) => {
                         view.update(cx, |v, cx| v.set_view(*mode, cx))
                     }
-                    crate::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
+                    crate::git::changes::ChangesEvent::OpenDiff { cwd, path, staged } => {
                         this.open_change_review(&event_key, cwd, path.as_deref(), *staged, cx)
                     }
                 },
@@ -365,7 +365,7 @@ impl Monos {
             let summary_id = mono.id.clone();
             let git_event = cx.subscribe(
                 &git,
-                move |this, _, _: &crate::git_status::GitChanged, cx| {
+                move |this, _, _: &crate::runtime::git_status::GitChanged, cx| {
                     if let Some(summary) = this.project_changes.summaries.get_mut(&summary_id) {
                         summary.loaded = None;
                         summary.revision += 1;
@@ -414,9 +414,9 @@ impl Monos {
         };
         let review = surface.review.clone().unwrap_or_else(|| {
             cx.new(|cx| {
-                crate::review::ReviewPane::new(
+                crate::git::review::ReviewPane::new(
                     surface.git.clone(),
-                    crate::review::ReviewState::default(),
+                    crate::git::review::ReviewState::default(),
                     cx,
                 )
             })
@@ -425,9 +425,9 @@ impl Monos {
             let review_key = key.clone();
             let event = cx.subscribe(
                 &review,
-                move |this, _, event: &crate::review::ReviewEvent, cx| {
+                move |this, _, event: &crate::git::review::ReviewEvent, cx| {
                     match event {
-                        crate::review::ReviewEvent::Empty => {
+                        crate::git::review::ReviewEvent::Empty => {
                             if let Some(surface) =
                                 this.project_changes.surfaces.get_mut(&review_key)
                             {
@@ -441,7 +441,7 @@ impl Monos {
                                 this.route = None;
                             }
                         }
-                        crate::review::ReviewEvent::Comment(text) => {
+                        crate::git::review::ReviewEvent::Comment(text) => {
                             this.enqueue(&review_key.0, text.clone(), Vec::new(), false, cx)
                         }
                         _ => (),
@@ -458,7 +458,7 @@ impl Monos {
         }
         review.update(cx, |view, cx| {
             view.open(
-                crate::review::ReviewTab::Changes {
+                crate::git::review::ReviewTab::Changes {
                     cwd: cwd.into(),
                     path: path.map(str::to_owned),
                     staged: Some(staged),
@@ -562,7 +562,7 @@ impl Monos {
             menu,
             anchor: Anchor::Slot(anchor),
             width: 280.,
-            align: crate::popover::Align::Start,
+            align: crate::ui::popover::Align::Start,
             _events: vec![event],
         });
         cx.notify();
@@ -666,7 +666,7 @@ impl Monos {
                             .px_2()
                             .rounded_md()
                             .hover(|s| s.bg(content(0.05)))
-                            .child(crate::project_settings::project_icon(
+                            .child(crate::ui::project_badge::project_icon(
                                 &appearance,
                                 &project.path,
                                 14.,
@@ -743,8 +743,8 @@ impl Monos {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn file(path: &str) -> monocode_core::checkpoint::CheckpointFile {
-        monocode_core::checkpoint::CheckpointFile {
+    fn file(path: &str) -> monocode_core::vcs::checkpoint::CheckpointFile {
+        monocode_core::vcs::checkpoint::CheckpointFile {
             path: path.into(),
             relative: path.into(),
             status: "modified".into(),

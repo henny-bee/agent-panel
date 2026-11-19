@@ -2,7 +2,7 @@
 //! useful follow-ups and propose them. The app gathers short headlines of what
 //! changed; the Mono opens details itself only when something looks worth it.
 use super::files;
-use crate::{store::Session, transcript::Row};
+use crate::{session::transcript::Row, store::Session};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -91,7 +91,7 @@ pub fn due(minutes: u32, state: &State, last_activity: u64, now: u64) -> bool {
 pub fn model(
     provider: &str,
     current: Option<&str>,
-    available: &[crate::catalog::Model],
+    available: &[crate::provider::catalog::Model],
 ) -> Option<(String, Option<String>)> {
     let candidates: &[&str] = match provider {
         "claude" => &["haiku", "claude-haiku-5-5"],
@@ -274,7 +274,7 @@ pub fn last_exchange(rows: &[Row]) -> (String, String) {
 /// Notes saved from the Mono's projects. Notes with no project are the user's
 /// own; the Mono can still list them, but a heartbeat does not raise them.
 pub fn changed_notes(
-    notes: &[crate::notes::Note],
+    notes: &[crate::session::notes::Note],
     projects: &[String],
     since: u64,
     now: u64,
@@ -309,7 +309,7 @@ pub fn changed_notes(
 /// One line per changed inbox item; a large PR still costs one line. Only items
 /// tied to an assigned checkout: tracker issues (Linear, Jira) have none.
 pub fn changed_inbox(
-    items: &[crate::inbox::Item],
+    items: &[crate::integrations::inbox::Item],
     projects: &[String],
     since: u64,
     now: u64,
@@ -330,7 +330,7 @@ pub fn changed_inbox(
         .map(|i| {
             let mut line = format!(
                 "{} {} {} \"{}\" · {}",
-                crate::inbox::provider_label(&i.provider),
+                crate::integrations::inbox::provider_label(&i.provider),
                 if i.kind.is_empty() { "item" } else { &i.kind },
                 i.reference(),
                 clip(&i.title, 120),
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn heartbeat_model_prefers_cheap_catalog_entries_and_falls_back() {
-        let m = |id: &str, efforts: &[&str]| crate::catalog::Model {
+        let m = |id: &str, efforts: &[&str]| crate::provider::catalog::Model {
             id: id.into(),
             name: id.into(),
             alias_target: None,
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn notes_and_inbox_are_scoped_to_assigned_projects() {
-        let note = |id: &str, cwd: Option<&str>| crate::notes::Note {
+        let note = |id: &str, cwd: Option<&str>| crate::session::notes::Note {
             id: id.into(),
             title: id.into(),
             body: "body".into(),
@@ -679,7 +679,7 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["mine"]);
 
-        let item = |provider: &str, path: &str| crate::inbox::Item {
+        let item = |provider: &str, path: &str| crate::integrations::inbox::Item {
             provider: provider.into(),
             title: format!("{provider} item"),
             project_path: path.into(),
@@ -691,7 +691,7 @@ mod tests {
             item("github", "/x"),
             item("linear", ""),
         ];
-        let now = crate::inbox::timestamp_ms("2026-10-29T11:00:00Z") as u64;
+        let now = crate::integrations::inbox::timestamp_ms("2026-10-29T11:00:00Z") as u64;
         let lines = changed_inbox(&items, &["/repo".into()], 0, now);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("github item"));

@@ -9,7 +9,7 @@ impl Store {
         let message_id = format!("app-prompt-{}", crate::mono::files::content_hash(request));
         if state.draft.is_none() && !state.messages.iter().any(|m| m.id == message_id) {
             state.revision += 1;
-            state.draft = Some(crate::follow_up::Message {
+            state.draft = Some(crate::session::follow_up::Message {
                 id: message_id,
                 text: prompt.into(),
                 ..Default::default()
@@ -99,7 +99,7 @@ impl Store {
             }
             blocks
         };
-        let mut page = crate::app_access::conversation_page(&blocks, input)?;
+        let mut page = crate::project::app_access::conversation_page(&blocks, input)?;
         page["sessionId"] = json!(id);
         page["busy"] = json!(busy);
         page["hasDraft"] = json!(has_draft || blocks.iter().any(|b| b["draft"] == true));

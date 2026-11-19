@@ -40,7 +40,7 @@ impl Motion {
         if t >= 1. {
             return (self.to, true);
         }
-        let p = crate::reveal::bezier(t, 0.2, 0.9, 0.3, 1.);
+        let p = crate::ui::motion::reveal::bezier(t, 0.2, 0.9, 0.3, 1.);
         (
             Pose {
                 x: self.from.x + (self.to.x - self.from.x) * p,

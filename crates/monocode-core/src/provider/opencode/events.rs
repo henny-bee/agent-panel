@@ -1,7 +1,7 @@
 //! OpenCode v1 snapshots and v2 durable events share one native transcript.
 use super::*;
-use crate::agent::{Question, QuestionItem, QuestionOption};
-use crate::tool::tasks::{AgentRun, AgentStep, Panel};
+use crate::session::agent::{Question, QuestionItem, QuestionOption};
+use crate::session::tool::tasks::{AgentRun, AgentStep, Panel};
 use std::collections::HashSet;
 
 #[derive(Clone)]

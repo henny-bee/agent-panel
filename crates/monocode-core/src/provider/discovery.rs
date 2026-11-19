@@ -35,7 +35,7 @@ pub(super) fn matches(kind: Kind, path: &Path) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    crate::scm::shell::apply_gui_env(&mut command);
+    crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
     process::isolate(&mut command);
     let Ok(mut child) = command.spawn() else {
         return false;

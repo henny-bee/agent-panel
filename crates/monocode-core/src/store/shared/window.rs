@@ -11,7 +11,7 @@ pub const PAGE_TURNS: usize = 10;
 pub struct HistoryPage {
     pub rows: Vec<Row>,
     /// Turn receipts keyed by row offset within `rows`.
-    pub turns: HashMap<usize, crate::agent::TurnInfo>,
+    pub turns: HashMap<usize, crate::session::agent::TurnInfo>,
     /// The cursor for the page before this one, if any older blocks remain.
     pub before: Option<i64>,
 }

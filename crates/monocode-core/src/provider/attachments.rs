@@ -7,7 +7,7 @@ impl Request {
             self.settings
                 .attachments
                 .iter()
-                .filter(|p| crate::composer::image_mime(p).is_some())
+                .filter(|p| crate::session::composer::image_mime(p).is_some())
                 .map(|p| json!({"type":"localImage","path":p})),
         );
         json!(blocks)
@@ -17,14 +17,14 @@ impl Request {
             .settings
             .attachments
             .iter()
-            .any(|p| crate::composer::image_mime(p).is_some())
+            .any(|p| crate::session::composer::image_mime(p).is_some())
         {
             return Ok(json!(prompt));
         }
         let mut blocks = vec![json!({"type":"text","text":prompt})];
         for path in &self.settings.attachments {
-            if let Some(mime) = crate::composer::image_mime(path) {
-                blocks.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":crate::composer::image_data(path)?}}));
+            if let Some(mime) = crate::session::composer::image_mime(path) {
+                blocks.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":crate::session::composer::image_data(path)?}}));
             }
         }
         Ok(json!(blocks))
@@ -32,8 +32,8 @@ impl Request {
     pub(super) fn acp_content(&self) -> Result<Value, String> {
         let mut blocks = vec![json!({"type":"text","text":self.prompt})];
         for path in &self.settings.attachments {
-            if let Some(mime) = crate::composer::image_mime(path) {
-                blocks.push(json!({"type":"image","mimeType":mime,"data":crate::composer::image_data(path)?}));
+            if let Some(mime) = crate::session::composer::image_mime(path) {
+                blocks.push(json!({"type":"image","mimeType":mime,"data":crate::session::composer::image_data(path)?}));
             }
         }
         Ok(json!(blocks))
@@ -41,8 +41,8 @@ impl Request {
     pub(super) fn pi_images(&self) -> Result<Value, String> {
         let mut blocks = Vec::new();
         for path in &self.settings.attachments {
-            if let Some(mime) = crate::composer::image_mime(path) {
-                blocks.push(json!({"type":"image","mimeType":mime,"data":crate::composer::image_data(path)?}));
+            if let Some(mime) = crate::session::composer::image_mime(path) {
+                blocks.push(json!({"type":"image","mimeType":mime,"data":crate::session::composer::image_data(path)?}));
             }
         }
         Ok(json!(blocks))

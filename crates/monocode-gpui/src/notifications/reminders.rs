@@ -1,11 +1,11 @@
 //! ReminderNotices.tsx. Persistence and opening sessions belong to the host.
-use crate::{
+use crate::ui::{
     popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover},
     theme::*,
 };
 use chrono::{Local, TimeZone};
 use gpui::{Context, Entity, EventEmitter, Role, Subscription, Window, div, prelude::*, px};
-use monocode_core::session_groups::{reminder_at, reminder_presets};
+use monocode_core::session::groups::{reminder_at, reminder_presets};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Snapshot {

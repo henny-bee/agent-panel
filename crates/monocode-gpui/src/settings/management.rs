@@ -1,6 +1,6 @@
 //! React Settings forms and their asynchronous actions.
-use super::widgets::{note, secondary_button};
 use super::*;
+use crate::ui::widgets::{note, secondary_button};
 use monocode_core::provider::Kind;
 
 #[derive(Clone)]
@@ -24,7 +24,7 @@ pub(super) struct Editor {
     pub busy: bool,
     pub error: Option<String>,
     pub editing: bool,
-    pub inspection: Option<monocode_core::cli::Inspection>,
+    pub inspection: Option<monocode_core::provider::cli::Inspection>,
     previous: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
@@ -65,7 +65,10 @@ impl SettingsView {
         if matches!(target, Target::Skill) {
             name.update(cx, |input, cx| {
                 input.set_font_size(13.);
-                input.set_text(monocode_core::skills::slug_name(&self.skill_query), cx);
+                input.set_text(
+                    monocode_core::provider::skills::slug_name(&self.skill_query),
+                    cx,
+                );
             });
         }
         let body=cx.new(|cx|Input::multiline_field("JSON configuration", "{\"mcpServers\":{\"my-server\":{\"command\":\"npx\",\"args\":[\"-y\",\"example-mcp\"]}}}",cx));
@@ -146,7 +149,7 @@ impl SettingsView {
         let generation = self.management_generation;
         let work = cx
             .background_executor()
-            .spawn(async move { monocode_core::cli::inspect(kind, Some(&draft)) });
+            .spawn(async move { monocode_core::provider::cli::inspect(kind, Some(&draft)) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -246,11 +249,14 @@ impl SettingsView {
         let generation = self.management_generation;
         let work = cx.background_executor().spawn(async move {
             match target {
-                Target::Mcp => monocode_core::mcp::mcp_add(cwd, provider, scope, name, body),
-                Target::Skill => {
-                    monocode_core::skills::create_blank(&cwd, &name, scope == "user").map(|_| ())
+                Target::Mcp => {
+                    monocode_core::provider::mcp::mcp_add(cwd, provider, scope, name, body)
                 }
-                Target::Worktree => monocode_core::git::create_project_worktree(
+                Target::Skill => {
+                    monocode_core::provider::skills::create_blank(&cwd, &name, scope == "user")
+                        .map(|_| ())
+                }
+                Target::Worktree => monocode_core::vcs::git::create_project_worktree(
                     std::path::Path::new(&cwd),
                     &name,
                     Some(&base),
@@ -292,7 +298,7 @@ impl SettingsView {
         let mut rows = Vec::new();
         match &target {
             Target::ResetMono(mono) => {
-                let default = monocode_core::mono::Mono {
+                let default = monocode_core::session::mono_model::Mono {
                     name: String::new(),
                     mascot: mono.mascot.clone(),
                     ..Default::default()
@@ -309,7 +315,7 @@ impl SettingsView {
             }
             Target::Cli(kind) => {
                 let overridden = self.prefs.binary_paths.contains_key(kind.id());
-                let pending = monocode_core::cli::configured(*kind)
+                let pending = monocode_core::provider::cli::configured(*kind)
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
                     != self.prefs.binary_paths.get(kind.id()).cloned();
@@ -353,7 +359,7 @@ impl SettingsView {
                             .bg(content(0.03))
                             .text_size(px(10.))
                             .child(
-                                div().font_family(crate::fonts::mono()).child(
+                                div().font_family(crate::ui::fonts::mono()).child(
                                     inspection
                                         .as_ref()
                                         .map(|i| i.path.display().to_string())
@@ -746,18 +752,18 @@ impl SettingsView {
         };
         actions = actions
             .child(
-                crate::modal::disabled(
-                    crate::modal::ghost_button("cancel-management", "Cancel"),
+                crate::ui::modal::disabled(
+                    crate::ui::modal::ghost_button("cancel-management", "Cancel"),
                     busy,
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.close_management(window, cx))),
             )
             .child(
-                crate::modal::disabled(
+                crate::ui::modal::disabled(
                     if matches!(target, Target::DeleteTree(_) | Target::ResetMono(_)) {
-                        crate::modal::danger_button("submit-management", label)
+                        crate::ui::modal::danger_button("submit-management", label)
                     } else {
-                        crate::modal::primary_button("submit-management", label)
+                        crate::ui::modal::primary_button("submit-management", label)
                     },
                     busy,
                 )
@@ -815,7 +821,7 @@ impl SettingsView {
             .absolute()
             .inset_0()
             .occlude()
-            .child(crate::modal::scrim("settings-management-scrim"))
+            .child(crate::ui::modal::scrim("settings-management-scrim"))
             .flex()
             .items_center()
             .justify_center()
@@ -833,10 +839,10 @@ impl SettingsView {
                     }))
                     .max_w_full()
                     .relative()
-                    .rounded(px(crate::modal::RADIUS))
+                    .rounded(px(crate::ui::modal::RADIUS))
                     .border_1()
-                    .border_color(content(crate::modal::BORDER))
-                    .child(crate::modal::surface(crate::modal::RADIUS - 1.))
+                    .border_color(content(crate::ui::modal::BORDER))
+                    .child(crate::ui::modal::surface(crate::ui::modal::RADIUS - 1.))
                     .child(
                         div()
                             .p_4()
@@ -868,7 +874,7 @@ impl SettingsView {
                     )
                     .child(div().p_4().child(form)),
             );
-        Some(crate::modal::window_overlay(window, overlay).into_any_element())
+        Some(crate::ui::modal::window_overlay(window, overlay).into_any_element())
     }
 }
 fn scopes(provider: &str) -> &'static [&'static str] {
@@ -896,7 +902,7 @@ fn form_field(label: &str, input: Entity<Input>, height: f32) -> AnyElement {
                 .border_color(content(0.1))
                 .bg(content(0.04))
                 .when(label == "JSON configuration", |d| {
-                    d.font_family(crate::fonts::mono())
+                    d.font_family(crate::ui::fonts::mono())
                 })
                 .child(input),
         )

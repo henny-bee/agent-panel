@@ -1,10 +1,9 @@
 use crate::{
-    settings::{
-        SettingsView,
-        management::Target,
+    settings::{SettingsView, management::Target},
+    ui::{
+        theme::*,
         widgets::{icon_action, note, page_header, secondary_button},
     },
-    theme::*,
 };
 use gpui::{
     AnyElement, ClipboardItem, Context, Focusable, Role, SharedString, div, prelude::*, px,
@@ -17,8 +16,9 @@ impl SettingsView {
         let scope = e.scope.clone();
         let error = e.error.clone();
         let raw = name.read(cx).content.to_string();
-        let valid =
-            monocode_core::skills::is_valid_skill_name(&monocode_core::skills::slug_name(&raw));
+        let valid = monocode_core::provider::skills::is_valid_skill_name(
+            &monocode_core::provider::skills::slug_name(&raw),
+        );
         let project = !self.selected_project.is_empty() && self.selected_project != "~";
         name.update(cx, |i, _| i.set_read_only(busy));
         div()

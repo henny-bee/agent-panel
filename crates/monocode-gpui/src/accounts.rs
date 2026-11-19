@@ -4,16 +4,19 @@ pub(crate) mod resets;
 mod signin;
 pub(crate) mod ui;
 use crate::{
-    input::{self, Input},
     runtime::{Database, locked},
+    ui::input::{self, Input},
 };
 use gpui::{
     App, Context, Entity, EventEmitter, Focusable, Global, Subscription, Task, Window, prelude::*,
 };
 use monocode_core::{
-    accounts::{self, Account, AuthAction, Book, Profile},
-    provider::Kind,
-    usage::{self, FetchError, Snapshot},
+    provider::{
+        Kind,
+        accounts::{self, Account, AuthAction, Book},
+        usage::{self, FetchError, Snapshot},
+    },
+    session::profile::Profile,
 };
 use std::{
     collections::HashMap,
@@ -399,7 +402,7 @@ impl Accounts {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                if key.profile.id != accounts::DEFAULT
+                if key.profile.id != monocode_core::session::profile::DEFAULT
                     && !this.book.exists(key.kind, &key.profile.id)
                 {
                     return;
@@ -572,7 +575,7 @@ impl Accounts {
                     kind.label()
                 ),
                 "Work or Personal",
-                crate::theme::content(0.25),
+                crate::ui::theme::content(0.25),
                 cx,
             );
             input.set_font_size(12.);
@@ -713,7 +716,7 @@ impl Accounts {
                 accounts::stop_processes(kind, &profile);
             }
             let result = accounts::authenticate(kind, &profile, action, cancel);
-            monocode_core::catalog::invalidate(kind, &profile);
+            monocode_core::provider::catalog::invalidate(kind, &profile);
             result
         });
         cx.spawn(async move |this, cx| {
