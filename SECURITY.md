@@ -6,4 +6,4 @@ Report it privately on this repository: open the **Security** tab and choose **R
 
 If the problem is also in the original Monocode, please report it to Monocode as well: <https://github.com/hardbeat920/monocode/security/advisories/new>.
 
-Agent Panel runs the agent CLIs you already have installed. A session can edit files and run commands the same way those tools would in a terminal. Treat a bad prompt like running those CLIs yourself.
+MCode runs the agent CLIs you already have installed. A session can edit files and run commands the same way those tools would in a terminal. Treat a bad prompt like running those CLIs yourself.

@@ -672,11 +672,7 @@ impl Completion {
                     "Orchestrator",
                     "Plan and coordinate agent work",
                 ),
-                (
-                    "operator",
-                    "Operator",
-                    "Give this thread access to MonoCode",
-                ),
+                ("operator", "Operator", "Give this thread access to MCode"),
                 ("plan", "Plan mode", "Review a plan before building"),
                 (
                     "btw",

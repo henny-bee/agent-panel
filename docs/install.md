@@ -1,90 +1,44 @@
-# Linux installation
+# Install MCode
 
-Download the x86_64 `.deb`, `.rpm`, or AppImage from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest). Install and sign in to at least one [supported provider](providers.md) before starting a session.
+MCode has no prebuilt releases yet. Build it from source as described in [building](building.md), then run the app it produces:
 
-## Ubuntu / Debian packages
-
-Install the downloaded `.deb` with apt so its runtime dependencies are installed too:
-
-```bash
-sudo apt install ./MonoCode_*.deb
-```
-
-## Fedora / Enterprise Linux packages
-
-On Fedora, or on an Enterprise Linux 10 system (registered RHEL, Rocky, Alma, CentOS Stream, Oracle), install the release `.rpm`. The `.rpm` declares its own runtime dependencies, so `dnf` pulls the WebKitGTK stack for you.
-
-Fedora needs no extra repository step:
-
-```bash
-sudo dnf install ./MonoCode-*.rpm
-```
-
-Enterprise Linux 10 needs EPEL first, because `webkit2gtk4.1` is an EPEL package there. CRB is not needed to run MonoCode.
-
-On Rocky, Alma, or CentOS Stream 10:
-
-```bash
-sudo dnf install -y epel-release
-sudo dnf install ./MonoCode-*.rpm
-```
-
-On registered RHEL 10:
-
-```bash
-sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
-sudo dnf install ./MonoCode-*.rpm
-```
-
-On Oracle Linux 10, `epel-release` does not enable `ol10_developer_EPEL`, which is the repository that provides WebKitGTK. Enable it before installing the rpm:
-
-```bash
-sudo dnf install -y oracle-epel-release-el10 dnf-plugins-core
-sudo dnf config-manager --set-enabled ol10_developer_EPEL
-sudo dnf install ./MonoCode-*.rpm
-```
-
-GitHub Releases builds the `.rpm` on Enterprise Linux 10 so it loads on Fedora and EL 10. EL 9 and older are unsupported (`webkit2gtk4.1-devel` only exists in EPEL 10).
-
-For native build dependencies and packaging commands, see [building from source](building.md#fedora--enterprise-linux-packages). Building on EL 10 also needs CRB; the repository’s setup helper enables it and EPEL automatically.
-
-## AppImage
-
-The AppImage needs WebKitGTK 4.1 on the host, the same as the `.deb` and `.rpm`:
-
-| Distribution | Host package |
+| Platform | Run |
 | --- | --- |
-| Debian / Ubuntu | `libwebkit2gtk-4.1-0` |
-| Fedora / Enterprise Linux 10 | `webkit2gtk4.1` |
-| Arch | `webkit2gtk-4.1` |
+| Windows | `crates\monocode-gpui\target\release\monocode-gpui.exe`. You can pin it to the taskbar. |
+| macOS | `crates/monocode-gpui/target/release/Monocode Native.app`, made by `npm run native:build` |
+| Linux | `crates/monocode-gpui/target/release/monocode-gpui` |
 
-On Enterprise Linux 10, enable EPEL as described above before installing the host package. On Fedora, install WebKit if the launcher asks for it:
+Install and sign in to at least one [agent CLI](providers.md) before you start a session.
 
-```bash
-sudo dnf install webkit2gtk4.1
-```
+Monocode's own `.deb`, `.rpm`, AppImage and installer packages are on the [Monocode releases page](https://github.com/hardbeat920/monocode/releases). They are Monocode, not MCode, and don't include MCode's changes.
 
-Keep the AppImage somewhere you can write to, such as `~/Applications`, so updates can replace it. In that directory, make it executable and run it:
+## Where MCode keeps its data
 
-```bash
-chmod +x MonoCode_*.AppImage
-./MonoCode_*.AppImage
+A release build opens Monocode's database and saves changes there, so you see the same projects and conversations as in Monocode.
+
+| Platform | Data folder |
+| --- | --- |
+| Windows | `%APPDATA%\com.monocode.desktop\` |
+| macOS | `~/Library/Application Support/com.monocode.desktop/` |
+| Linux | `$XDG_DATA_HOME/com.monocode.desktop/`, or `~/.local/share/com.monocode.desktop/` |
+
+> [!WARNING]
+> Back up that folder with the app closed before you open MCode for the first time. Don't edit the same conversations in Monocode and MCode at the same time.
+
+MCode's own preferences are saved next to the database in `monocode.db.gpui.sqlite3`.
+
+A development build (`npm run native:dev`) uses a separate `Monocode Development` folder instead. The [native guide](native/README.md#data-and-configuration) lists where it is on each platform. Set `MONOCODE_NATIVE_DATA_DIR` to use another folder.
+
+To check the database without opening a window or changing anything:
+
+```sh
+crates/monocode-gpui/target/release/monocode-gpui --check-data
 ```
 
 ## Updates
 
-The AppImage updates itself from **Settings → General**. The `.deb` and `.rpm` update through apt or dnf: download the newer package from [GitHub Releases](https://github.com/hardbeat920/monocode/releases/latest) and install it with the same command used above.
+MCode doesn't update itself: its update check says automatic updates aren't configured for this build. To update, pull the latest code and build again. On Windows, close MCode first, because a running program can't be replaced.
 
-For beta release feeds and testing AppImage updates, see [release and updater details](building.md#beta-releases-and-updates).
+## Uninstall
 
-## Troubleshooting on Fedora / Wayland
-
-The AppImage uses the host WebKitGTK 4.1 stack and native Wayland, like the `.deb` and `.rpm`. Set `GDK_BACKEND=x11` to keep the previous X11-forced behavior (for example NVIDIA plus Wayland):
-
-```bash
-GDK_BACKEND=x11 ./MonoCode_*.AppImage
-```
-
-Older AppImages that bundled Ubuntu-built libraries aborted with `Could not create default EGL display: EGL_BAD_PARAMETER`; current builds do not.
-
-Return to the [README](../README.md) for macOS and Windows downloads.
+Delete the repository folder or its `crates/monocode-gpui/target` folder. Your data folder stays, because Monocode uses it too. Delete it yourself only if you no longer use Monocode either.

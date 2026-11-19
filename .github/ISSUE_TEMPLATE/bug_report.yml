@@ -1,16 +1,16 @@
 name: Bug report
-description: Report a problem in Agent Panel
+description: Report a problem in MCode
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Agent Panel builds on macOS, Linux and Windows. Problems that also happen in the original Monocode belong at https://github.com/hardbeat920/monocode/issues.
+        MCode builds on Windows, macOS and Linux. Problems that also happen in the original Monocode belong at https://github.com/hardbeat920/monocode/issues.
 
   - type: input
     id: version
     attributes:
-      label: Agent Panel commit
+      label: MCode commit
       placeholder: "9bc68191"
     validations:
       required: true
@@ -47,6 +47,9 @@ body:
         - Pi
         - omp
         - fx
+        - Antigravity
+        - Hermes Agent
+        - Devin
         - Multiple / not sure
     validations:
       required: true

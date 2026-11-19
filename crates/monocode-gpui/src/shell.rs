@@ -2154,7 +2154,7 @@ impl Shell {
         };
         let answer = window.prompt(
             gpui::PromptLevel::Warning,
-            "Reload Monocode Native?",
+            "Reload MCode?",
             Some(detail),
             &["Reload", "Cancel"],
             cx,
@@ -9085,7 +9085,7 @@ impl Render for Shell {
             .id("monocode-workspace")
             .relative()
             .role(Role::Application)
-            .aria_label("Monocode Native")
+            .aria_label("MCode")
             .key_context("Workspace")
             .track_focus(&self.focus)
             .capture_key_up(cx.listener(|this, _, _, _| this.archive_shortcut_held = false))
@@ -9174,13 +9174,7 @@ impl Render for Shell {
             }))
             .on_action(|_: &About, window, cx| {
                 let detail = format!("Version {}", crate::notifications::updater::version());
-                drop(window.prompt(
-                    gpui::PromptLevel::Info,
-                    "Monocode Native",
-                    Some(&detail),
-                    &["OK"],
-                    cx,
-                ));
+                drop(window.prompt(gpui::PromptLevel::Info, "MCode", Some(&detail), &["OK"], cx));
             })
             .on_action(|_: &ZoomWindow, window, _| window.zoom_window())
             .on_action(

@@ -1,4 +1,6 @@
-# Monocode mobile
+# MCode mobile
+
+The mobile companion comes from Monocode and hasn't been changed for MCode.
 
 The Expo app lives in this directory and has its own npm dependencies and lockfile. The app pairs with the desktop over QUIC and shows its real workspace. Use a Node.js LTS release for development.
 

@@ -256,7 +256,7 @@ impl SettingsView {
             Some(if light {
                 "Translucency is available in dark mode.".into()
             } else {
-                "How much of the desktop shows through MonoCode.".into()
+                "How much of the desktop shows through MCode.".into()
             }),
             None,
             translucency,

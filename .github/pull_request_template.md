@@ -12,6 +12,6 @@
 
 ## Checklist
 
-- [ ] I ran `npm run check`
+- [ ] I ran `npm run native:check`
 - [ ] This PR is small and focused
 - [ ] I did not mix unrelated changes

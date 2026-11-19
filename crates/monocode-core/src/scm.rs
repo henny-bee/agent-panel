@@ -1036,7 +1036,7 @@ fn with_signing_hint(error: String) -> String {
         return error;
     }
     format!(
-        "{error}\n\nGit couldn't sign this commit. MonoCode runs git without a terminal, \
+        "{error}\n\nGit couldn't sign this commit. MCode runs git without a terminal, \
          so your signer needs a GUI passphrase prompt (e.g. pinentry-mac) or an unlocked agent."
     )
 }
