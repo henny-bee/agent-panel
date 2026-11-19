@@ -68,15 +68,22 @@ pub fn terminate(child: &mut std::process::Child) {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
     #[cfg(windows)]
-    {
-        let mut kill = Command::new("taskkill");
-        kill.args(["/PID", &child.id().to_string(), "/T", "/F"]);
-        use std::os::windows::process::CommandExt;
-        kill.creation_flags(CREATE_NO_WINDOW);
-        let _ = kill.status();
-    }
+    kill_tree(child.id());
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Kills a process and everything it started. Quiet: a tree that already
+/// exited makes taskkill print "process not found", which is no error here.
+#[cfg(windows)]
+pub fn kill_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// How long a provider whose stdin was closed may take to exit by itself.
@@ -247,13 +254,7 @@ pub fn shutdown_all() {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
         #[cfg(windows)]
-        {
-            let mut c = Command::new("taskkill");
-            c.args(["/PID", &pid.to_string(), "/T", "/F"]);
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(CREATE_NO_WINDOW);
-            let _ = c.status();
-        }
+        kill_tree(pid);
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while !active()

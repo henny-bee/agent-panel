@@ -811,7 +811,10 @@ mod tests {
                 std::process::id()
             ));
             std::fs::create_dir_all(&dir).unwrap();
-            Self(dir.canonicalize().unwrap())
+            // Windows writes a canonical path as \\?\C:\..., which Git and
+            // people never type; keep the plain form.
+            let dir = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+            Self(PathBuf::from(dir.trim_start_matches(r"\\?\")))
         }
     }
     impl Drop for Temp {
@@ -880,10 +883,11 @@ mod tests {
             ],
         );
         let result = worktrees(root).unwrap();
-        assert_eq!(
-            result["worktrees"],
-            json!([{ "path": linked, "name": "feature/mobile" }])
-        );
+        let listed = result["worktrees"].as_array().unwrap();
+        assert_eq!(listed.len(), 1);
+        // Git writes C:/ on Windows; compare as paths, not text.
+        assert_eq!(Path::new(listed[0]["path"].as_str().unwrap()), linked);
+        assert_eq!(listed[0]["name"], "feature/mobile");
         assert_eq!(resolve_root(root, linked.to_str()).unwrap(), linked);
         let mut branches = HashMap::new();
         super::super::catalog::checkout_branch(root.to_str().unwrap(), &mut branches);

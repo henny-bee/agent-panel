@@ -36,7 +36,9 @@ impl VisualRuntime {
         let runtime = Runtime::new().map_err(|e| format!("Could not start visual runtime: {e}"))?;
         runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
         runtime.set_max_stack_size(256 * 1024);
-        let deadline = Rc::new(Cell::new(Instant::now() + CALL_DEADLINE));
+        // Starting the VM and our SDK can be slow on a busy machine; only the
+        // agent's own code runs against the call deadline, set below.
+        let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)));
         let interrupted = Rc::new(Cell::new(false));
         let interrupt_deadline = deadline.clone();
         let interrupt_flag = interrupted.clone();
@@ -53,6 +55,7 @@ impl VisualRuntime {
             let result = (|| -> rquickjs::Result<Persistent<Object<'static>>> {
                 let controller: Object = ctx.eval(include_str!("visual/sdk.js"))?;
                 let init: Function = controller.get("init")?;
+                deadline.set(Instant::now() + CALL_DEADLINE);
                 init.call::<_, ()>((source,))?;
                 Ok(Persistent::save(&ctx, controller))
             })();
