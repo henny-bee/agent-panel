@@ -627,7 +627,9 @@ fn operator_creates_selects_and_validates_real_worktrees(cx: &mut TestAppContext
             )
         })
         .unwrap();
-    std::fs::remove_dir_all(root).unwrap();
+    // Best effort: live sessions keep the database open until the test
+    // process ends, and Windows can't delete an open file.
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[gpui::test]

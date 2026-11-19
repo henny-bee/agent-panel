@@ -1,7 +1,8 @@
-# Monocode Native preview
+# Native guide
 
-Monocode Native is the experimental Rust + GPUI app. The production app still
-uses React/Tauri. Native builds have their own Cargo workspace and lockfile.
+MCode is the Rust + GPUI desktop app that Monocode calls Monocode Native.
+Monocode's older React/Tauri app is not part of MCode. The app has its own
+Cargo workspace and lockfile in `crates/monocode-gpui`.
 
 ## Requirements
 
@@ -12,9 +13,9 @@ uses React/Tauri. Native builds have their own Cargo workspace and lockfile.
 - At least one installed, signed-in agent CLI. See [provider setup](../providers.md).
 
 The native commands do not require `npm install` or a frontend build.
-macOS is the primary preview target. A Linux ARM64 source build has been
-smoke-tested in a VM; Linux x64 packages and Windows GUI interaction still need
-runtime testing. See [preview limitations](parity.md).
+Monocode built this app mainly for macOS. MCode is also developed and used on
+Windows. A Linux ARM64 source build was smoke-tested in a VM, and Linux x64
+still needs more testing. See [known limitations](parity.md).
 
 Fenced `mermaid` blocks render as native diagrams in Markdown previews and
 conversations. See [Mermaid diagrams](mermaid.md) for examples and limitations.
@@ -71,8 +72,8 @@ Type `r` then Enter in the terminal to rebuild and restart. The current app stay
 open until the new build succeeds. Ctrl+C stops the app and runner. There is no
 hot reload or automatic rebuild on save.
 
-On macOS, the command packages and launches `Monocode Native.app`. Other
-platforms launch the executable directly.
+On macOS, the command packages and launches `Monocode Native.app` (the bundle
+keeps its Monocode name). Other platforms launch the executable directly.
 
 ## Build
 
@@ -81,7 +82,7 @@ npm run native:build
 ```
 
 This creates an optimized build without launching it. **The release app uses the
-installed MonoCode database, and changes save there.** No extra flags are needed.
+installed Monocode database, and changes save there.** No extra flags are needed.
 
 On macOS, open:
 
@@ -89,15 +90,15 @@ On macOS, open:
 open "crates/monocode-gpui/target/release/Monocode Native.app"
 ```
 
-The app has a separate name and application ID (`dev.usemono.gpui`) so it can be
-installed alongside MonoCode. Local source builds are signed locally, without
+The app has its own application ID (`dev.usemono.gpui`), so it can be installed
+alongside Monocode's Tauri app. Local source builds are signed locally, without
 Apple notarization or configured automatic updates. Linux and Windows builds
 produce a standalone executable
 under `crates/monocode-gpui/target/release/`. `CARGO_TARGET_DIR` and
 `CARGO_BUILD_TARGET` can change these output paths.
 
-The **Monocode Native Preview** GitHub Actions workflow runs checks and build
-verification.
+The **Monocode Native Preview** GitHub Actions workflow (it keeps its Monocode
+name) runs checks and build verification.
 
 ## Data and configuration
 

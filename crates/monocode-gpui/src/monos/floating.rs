@@ -282,7 +282,7 @@ impl Floating {
                 )
             })
             .child(
-                header_button("floating-reveal", "Open in MonoCode", "external-link").on_click(
+                header_button("floating-reveal", "Open in MCode", "external-link").on_click(
                     cx.listener(|this, _, window, cx| {
                         let id = this.selected.clone();
                         let owner = this.owner.clone();

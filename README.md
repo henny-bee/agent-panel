@@ -1,92 +1,146 @@
-<h1 align="center">Agent Panel</h1>
+<h1 align="center">MCode</h1>
 
 <p align="center">
-  <strong>A desktop GUI for your coding agents, based on Monocode Native.</strong>
+  <strong>A desktop app for your coding agents, based on Monocode.</strong>
 </p>
 
 <p align="center">
-  <img width="1680" height="1050" alt="Monocode with agent sessions open side by side" src="https://github.com/user-attachments/assets/89e04066-69de-473d-9aab-88b9ca3e3b7b" />
-  <br />
-  <sub>Screenshot of the original Monocode app.</sub>
+  <img src="docs/images/mcode.png" width="1000" alt="MCode with a Claude Code session, a file diff and the In this chat panel showing the context window, to-do list, tools and background tasks" />
 </p>
 
-Agent Panel is a fork of [Monocode](https://github.com/hardbeat920/monocode) by hardbeat920. It keeps only the Rust + GPUI desktop app (Monocode Native) and adds its own changes on top, most of them for Claude Code sessions.
+MCode is a desktop app for the agent CLIs you already use: Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent and Devin. If one is installed and logged in, MCode can run it. Every tab is a session, and the composer is its input. MCode does not sell tokens; each agent keeps using your own login.
 
-It runs the agent CLIs you already use: Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, omp, fx, Hermes Agent and Devin. If they're installed and logged in, Agent Panel can run them. Tabs are sessions, and the composer is the input. Agent Panel does not sell tokens.
+It runs on Windows, macOS and Linux.
 
-## Original project
+## Based on Monocode
 
-Agent Panel is based on **Monocode**: <https://github.com/hardbeat920/monocode>
+MCode is a fork of **[Monocode](https://github.com/hardbeat920/monocode)** by hardbeat920.
 
-Monocode's releases, documentation and issue tracker live there. Report problems with Agent Panel's own changes in this repository.
+Monocode has two desktop apps: the original React/Tauri app and **Monocode Native**, a newer app written in Rust with the GPUI framework. MCode keeps only Monocode Native and builds on it. Most of what MCode adds is for Claude Code sessions.
 
-## What Agent Panel adds
+- Monocode's own releases, documentation and issue tracker are in the [Monocode repository](https://github.com/hardbeat920/monocode).
+- Report problems with MCode's changes here. If a problem also happens in Monocode, please report it there too.
+- MCode uses the same MIT licence as Monocode. See [Credits](#credits) and [License](#license).
 
-- Claude sessions get two views in the Explorer. **Agents** lists the agents a chat started. **In this chat** shows the to-do list, MCP servers, tools, files, context files and skills Claude used.
+## What MCode adds
+
+### Claude Code panels
+
+Claude sessions get two views in the Explorer:
+
+- **Agents** lists the subagents a chat started, with their model, tokens, time and every step they took. It also shows the chat's estimated cost and total tokens.
+- **In this chat** shows what Claude used, one box per kind:
+  - **Context Window**: how full the chat's context is, such as `116K / 200K tokens`. The bar turns amber past 70% and red past 90%.
+  - **To-do**: Claude's task list and how much of it is done.
+  - **MCP**: the MCP servers used. Click a server to see its tools and how often each was called.
+  - **Tools**: the built-in tools used, most used first.
+  - **Run in Background**: commands, subagents and monitors still running, with a timer each. The box disappears when nothing is running.
+  - **Files**, **Context files** and **Skills**: the files Claude read, edited or created, the instruction files it loaded (such as `CLAUDE.md`), and the skills it used.
+
+The panels update the moment Claude writes to its chat log, without polling every second.
+
+### Workspace
+
 - Each split pane can open its own project panel, with its own tab, width and Git status.
 - A folder box at the top of the Explorer shows any folder you type or pick, in place of the chat's own folder.
+- A **Graph** section under **Changes** shows the commit history, like VS Code's Source Control graph. Drag the divider to resize it.
+- Opening a changed file from **Changes** is fast on Windows too. It used to take over 10 seconds there.
 - Opening the app again adds a window to the running app. Windows share live sessions, so a Claude CLI runs once however many windows show it.
-- The Claude Code CLI view follows `/clear` and `/resume`, so the tab stays on the conversation the CLI moved to.
 - The chevron next to the new-tab button starts a session on a model you pick.
+- The Explorer header has no New File or New Folder buttons.
+
+### Claude Code CLI
+
+- The CLI view follows `/clear` and `/resume` on every platform, so the tab stays on the conversation the CLI moved to.
+- Claude sessions start with Claude Code's to-do tools on (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`) unless you set that variable yourself.
+
+### Terminal, look and Git
+
+- Terminal programs that track the mouse receive clicks and drags.
+- Ctrl+V pastes in the terminal on Windows.
 - Chat backgrounds have a blur slider.
 - The window can be translucent on Linux when your compositor supports it.
-- Terminal programs that track the mouse receive clicks and drags.
-- Generated commit messages are shorter: one subject line of 50 characters or less, with a body only when a change has several parts.
-- Claude sessions start with Claude Code's to-do tools on (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`) unless you set that variable yourself.
+- MCode has its own app icon.
+- Generated commit messages are short: one subject line of 50 characters or less, with a body only when a change has several parts.
 
 ## Install
 
-There are no prebuilt releases of Agent Panel yet, so build it from source (below). The original Monocode Native preview builds are on the [Monocode releases page](https://github.com/hardbeat920/monocode/releases); they don't include Agent Panel's changes.
+There are no prebuilt MCode releases yet, so [build it from source](#build-from-source). Monocode's own packages, on the [Monocode releases page](https://github.com/hardbeat920/monocode/releases), don't include MCode's changes.
 
-Install and sign in to at least one supported agent first. See [provider setup](docs/providers.md).
+First install and sign in to at least one agent CLI. See [provider setup](docs/providers.md).
 
 > [!WARNING]
-> Agent Panel uses your existing Monocode database and saves changes there (on Linux, `~/.local/share/com.monocode.desktop/`). Back up that folder with the app closed before you try it, and don't edit the same conversations in Monocode and Agent Panel at once.
+> MCode uses your existing Monocode database and saves changes there. Back up its folder with the app closed before you try MCode, and don't edit the same conversations in Monocode and MCode at the same time.
+>
+> | Platform | Data folder |
+> | --- | --- |
+> | Windows | `%APPDATA%\com.monocode.desktop\` |
+> | macOS | `~/Library/Application Support/com.monocode.desktop/` |
+> | Linux | `~/.local/share/com.monocode.desktop/` |
 
 ## Build from source
 
-You need a stable Rust toolchain. On macOS you also need Xcode. On Debian or Ubuntu, install the build packages first:
+You need a current stable Rust toolchain from [rustup](https://rustup.rs). Each platform also needs the following:
 
-```sh
-sudo apt-get install clang cmake ninja-build pkg-config libfontconfig1-dev \
-  libfreetype6-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-  libxcb-randr0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-  libasound2-dev libx11-xcb-dev libegl1-mesa-dev libvulkan-dev libdbus-1-dev
-```
+- **Windows:** the `stable-x86_64-pc-windows-msvc` toolchain and the Visual Studio Build Tools with the **Desktop development with C++** workload. It provides the linker and the Windows SDK.
+- **macOS:** Xcode with its macOS components.
+- **Debian or Ubuntu:**
 
-Then build the app:
+  ```sh
+  sudo apt-get install clang cmake ninja-build pkg-config libfontconfig1-dev \
+    libfreetype6-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libxcb-randr0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+    libasound2-dev libx11-xcb-dev libegl1-mesa-dev libvulkan-dev libdbus-1-dev
+  ```
+
+Then build the app from the repository root:
 
 ```sh
 cargo build --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --release
 ```
 
-The app is written to `crates/monocode-gpui/target/release/monocode-gpui`.
+| Platform | The app |
+| --- | --- |
+| Windows | `crates\monocode-gpui\target\release\monocode-gpui.exe` |
+| macOS and Linux | `crates/monocode-gpui/target/release/monocode-gpui` |
 
 With Node.js 22+ you can also use the npm scripts:
 
 ```sh
 npm run native:dev     # launch with a separate development database
-npm run native:build   # build an optimized app that uses your installed Monocode data
+npm run native:build   # build an optimized app that uses your Monocode data
+npm run native:check   # run formatting, lints and tests
 ```
 
-Type `r` then Enter in the development terminal to rebuild and restart; there is no hot reload. The [native guide](docs/native/README.md) covers prerequisites, build output and checks, and [known limitations](docs/native/parity.md) lists what is still missing.
+In the `native:dev` terminal, type `r` then Enter to rebuild and restart. There is no hot reload. On macOS, `native:build` makes an app bundle that is still named `Monocode Native.app`.
 
-The mobile companion app is a separate Expo project in [`mobile/`](mobile/README.md). The `host/` folder holds the service that runs [remote sessions](docs/remote-access.md) on another machine.
+### Updating
+
+Builds made from source don't update themselves. To update, pull the latest code and build again. On Windows, close MCode first, because Windows doesn't let a build replace a program that is running.
+
+### Names you'll still see
+
+The program file (`monocode-gpui`), the code folders and the data folders keep their Monocode names. That's why MCode can read your existing Monocode data, and why changes from Monocode are still easy to bring in.
 
 ## Guides
 
-- [Provider setup](docs/providers.md)
-- [Native guide](docs/native/README.md)
+- [Provider setup](docs/providers.md): install and sign in to the agent CLIs
+- [Building](docs/building.md): build, run and check MCode on each platform
+- [Install](docs/install.md): where MCode keeps its data, and how to update
+- [Native guide](docs/native/README.md): data paths, development builds, fixtures and checks
 - [Agent access with /operator](docs/agent-access.md)
 - [Remote sessions, experimental](docs/remote-access.md)
+- [Changelog](CHANGELOG.md)
+
+The mobile companion app is a separate Expo project in [`mobile/`](mobile/README.md). The `host/` folder holds the service that runs [remote sessions](docs/remote-access.md) on another machine. Both come from Monocode.
 
 ## Contributing
 
-Bug reports and small, focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening one.
+Bug reports and small, focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open one. Security problems go through [SECURITY.md](SECURITY.md).
 
 ## Credits
 
-Agent Panel is built on Monocode by hardbeat920 and the Monocode contributors.
+MCode is built on Monocode by hardbeat920 and the Monocode contributors.
 
 [![Monocode contributors](https://contrib.rocks/image?repo=hardbeat920/monocode)](https://github.com/hardbeat920/monocode/graphs/contributors)
 

@@ -1,12 +1,12 @@
 # Contributing
 
-Agent Panel is a small fork of [Monocode](https://github.com/hardbeat920/monocode) with one maintainer. Bug reports and small, focused pull requests are welcome. For a bigger change, open an issue first so we can agree on the scope before you write it.
+MCode is a small fork of [Monocode](https://github.com/hardbeat920/monocode) with one maintainer. Bug reports and small, focused pull requests are welcome. For a bigger change, open an issue first so we can agree on the scope before you write it.
 
 If a problem also happens in the original Monocode, please report it there too: <https://github.com/hardbeat920/monocode/issues>.
 
 ## Get it running
 
-You need a stable Rust toolchain and at least one agent CLI installed and logged in. See [provider setup](docs/providers.md). The README lists the [build packages](README.md#build-from-source) for Linux; on macOS you need Xcode.
+You need a stable Rust toolchain and at least one agent CLI installed and logged in. See [provider setup](docs/providers.md). The README lists [what each platform needs](README.md#build-from-source): the Visual Studio C++ build tools on Windows, Xcode on macOS, and a list of packages on Linux.
 
 With Node.js 22+, start a development build that uses its own database, so your real conversations stay untouched:
 
@@ -41,7 +41,7 @@ cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-
 cargo test --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --profile native-dev -- --test-threads=1
 ```
 
-CI runs clippy and the tests for the app on macOS. On Linux, clippy reports some macOS-only code as unused, and UI tests that press macOS shortcuts fail, so compare against `main` there instead of expecting a clean run.
+CI runs clippy and the tests for the app on macOS. On Linux and Windows, some UI tests press macOS shortcuts or expect Unix paths and fail, and on Linux clippy reports some macOS-only code as unused. There, compare against `main` instead of expecting a clean run.
 
 ## Pull requests
 

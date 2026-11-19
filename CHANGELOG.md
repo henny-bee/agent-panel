@@ -1,11 +1,53 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to MCode are documented in this file.
+
+MCode is a fork of [Monocode](https://github.com/hardbeat920/monocode). Its own
+changes come first. Everything under [Monocode history](#monocode-history) is
+Monocode's changelog, kept as it was when MCode was forked from Monocode 0.16.0.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- Claude sessions get two views in the Explorer. **Agents** lists the subagents a chat started, with their steps, tokens and time, plus the chat's estimated cost. **In this chat** shows what Claude used: the to-do list, MCP servers, tools, files, context files and skills.
+- A **Context Window** box at the top of **In this chat** shows how full the chat's context is, such as `116K / 200K tokens`. Its bar turns amber past 70% and red past 90%.
+- A **Run in Background** box lists the commands, subagents and monitors Claude left running, each with a timer. It disappears when nothing is running.
+- Click an MCP server in **In this chat** to see its tools and how often each was called.
+- A **Graph** section under **Changes** shows the commit history, with a divider to resize it.
+- Each split pane can open its own project panel, with its own tab, width and Git status.
+- A folder box at the top of the Explorer shows any folder you type or pick.
+- Opening the app again adds a window to the running app, and windows share live sessions.
+- The chevron next to the new-tab button starts a session on a model you pick.
+- Chat backgrounds have a blur slider.
+- The window can be translucent on Linux when the compositor supports it.
+- Terminal programs that track the mouse receive clicks and drags.
+- Ctrl+V pastes in the terminal on Windows.
+
+### Changed
+
+- The app is named **MCode** in its window title, menu, About box and messages. Data folders keep their Monocode names, so existing data still opens.
+- The Claude panels update as soon as Claude writes to its chat log, instead of reading it every second.
+- The Claude panels list files most recently used first.
+- Generated commit messages are short: one subject line of 50 characters or less, with a body only when a change has several parts.
+- Claude sessions start with Claude Code's to-do tools on, unless `CLAUDE_CODE_ENABLE_TODO_TOOLS` is already set.
+- MCode has its own app icon, also on X11.
+- The Explorer header no longer has **New File** and **New Folder** buttons.
+
+### Fixed
+
+- Opening a changed file from **Changes** no longer takes over 10 seconds on Windows, and its staged state reads correctly there.
+- The Claude panels no longer stop updating until you click them.
+- **Run in Background** shows a command that moved to the background after it started, such as one that hit its timeout.
+- The Claude Code CLI tab follows `/clear` and `/resume`, on Windows too.
+- The Claude panels no longer keep the memory they read a transcript into.
+
+## Monocode history
+
+## Monocode, unreleased when MCode was forked
 
 ### Fixed
 
@@ -1586,7 +1628,7 @@ First public release. macOS (Apple Silicon) only.
 - Updater endpoint and minisign public key are injected at release time rather than committed, so forks do not inherit the maintainer's update channel.
 - macOS release builds sign with `APPLE_SIGNING_IDENTITY` via a config overlay; the committed default remains ad-hoc `-` for community builds.
 
-[Unreleased]: https://github.com/hardbeat920/monocode/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/henny-bee/agent-panel/commits/main
 [0.16.0]: https://github.com/hardbeat920/monocode/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/hardbeat920/monocode/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/hardbeat920/monocode/compare/v0.13.0...v0.14.0

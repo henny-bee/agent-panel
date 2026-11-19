@@ -1,12 +1,12 @@
 name: Feature request
-description: Suggest an idea or improvement for Agent Panel
+description: Suggest an idea or improvement for MCode
 title: "[Feature]: "
 labels: [enhancement]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Agent Panel.
+        Thanks for helping improve MCode.
 
   - type: textarea
     id: problem
@@ -21,7 +21,7 @@ body:
     id: solution
     attributes:
       label: Proposed solution
-      description: What would you like Agent Panel to do?
+      description: What would you like MCode to do?
     validations:
       required: true
 

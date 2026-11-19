@@ -44,13 +44,7 @@ pub fn stop_processes(kind: Kind, profile: &Profile) {
             libc::kill(-(pid as i32), libc::SIGKILL);
         }
         #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .creation_flags(0x0800_0000)
-                .status();
-        }
+        crate::process::kill_tree(pid);
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     while children()

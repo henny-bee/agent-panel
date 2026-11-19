@@ -1793,7 +1793,15 @@ mod tests {
         let spawned = spawn(&dir, size, 1, None);
         let sender = spawned.sender.expect("the shell started");
         assert!(spawned.shell_pid > 1);
-        let _ = sender.send(Msg::Input(Cow::Borrowed(b"printf 'mono%scode\\n' -\r")));
+        // Both print mono-code without the typed line containing it. Windows
+        // runs PowerShell, which has no printf, or Bash when SHELL names it;
+        // both expand an empty $().
+        let command: &[u8] = if cfg!(windows) {
+            b"echo mono$()-code\r"
+        } else {
+            b"printf 'mono%scode\\n' -\r"
+        };
+        let _ = sender.send(Msg::Input(Cow::Borrowed(command)));
         let screen = || {
             let term = spawned.term.lock();
             let grid = term.grid();
@@ -1807,7 +1815,8 @@ mod tests {
                 .join("\n")
         };
         let mut seen = false;
-        for _ in 0..250 {
+        // PowerShell can take seconds to start; a fast shell stops early.
+        for _ in 0..750 {
             std::thread::sleep(Duration::from_millis(20));
             if screen().contains("mono-code") {
                 seen = true;
@@ -1820,7 +1829,7 @@ mod tests {
         assert_eq!(foreground_label(spawned.master_fd, spawned.shell_pid), None);
         let _ = sender.send(Msg::Input(Cow::Borrowed(b"exit\r")));
         let mut exited = false;
-        for _ in 0..250 {
+        for _ in 0..750 {
             std::thread::sleep(Duration::from_millis(20));
             if let Ok(TermEvent::ChildExit(_)) = spawned.events.try_recv() {
                 exited = true;

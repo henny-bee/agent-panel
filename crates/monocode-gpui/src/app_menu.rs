@@ -51,17 +51,17 @@ pub(crate) fn install(prefs: &crate::settings::Preferences, cx: &mut App) {
         return;
     }
     cx.set_menus(vec![
-        Menu::new("Monocode Native").items([
-            MenuItem::action("About Monocode Native", About),
+        Menu::new("MCode").items([
+            MenuItem::action("About MCode", About),
             MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
-            MenuItem::action("Hide Monocode Native", Hide),
+            MenuItem::action("Hide MCode", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Monocode Native", Quit),
+            MenuItem::action("Quit MCode", Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("Open Project…", OpenProject),
