@@ -1797,6 +1797,13 @@ impl Conversation {
         self.sync_review(cx);
         self.load_git(cx);
     }
+    /// A switch made elsewhere, such as the Changes panel or a terminal,
+    /// reloads the composer's branch label.
+    pub(crate) fn follow_branch(&mut self, branch: Option<&str>, cx: &mut Context<Self>) {
+        if branch.is_some() && self.branch.as_deref() != branch {
+            self.load_git(cx);
+        }
+    }
     fn load_git(&mut self, cx: &mut Context<Self>) {
         let cwd = self.execution_cwd().to_owned();
         let work_cwd = cwd.clone();

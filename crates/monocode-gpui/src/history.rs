@@ -14,10 +14,17 @@ use gpui::{
     SharedString, Subscription, UniformListScrollHandle, Window, actions, canvas, div, fill, point,
     prelude::*, px, rgb, size, uniform_list,
 };
-use monocode_core::scm::{self, CommitDetails, HistoryCommit};
+use monocode_core::{
+    languages::Share,
+    scm::{self, CommitDetails, HistoryCommit},
+};
 use std::{collections::HashMap, path::PathBuf};
 
+mod languages;
+
 const ROW: f32 = 44.;
+/// The Code tab lists this many languages, then "Other".
+const LANGUAGE_ROWS: usize = 6;
 actions!(history, [CloseSearch]);
 
 pub(crate) fn bind(cx: &mut App) {
@@ -35,6 +42,8 @@ pub(crate) enum HistoryEvent {
         short_sha: String,
         subject: String,
     },
+    /// The section switched between GRAPH (false) and CODE (true).
+    Code(bool),
 }
 impl gpui::EventEmitter<HistoryEvent> for History {}
 
@@ -56,6 +65,10 @@ pub(crate) struct History {
     /// The collapsible GRAPH section under Changes, rather than the tab.
     section: bool,
     pub(crate) open: bool,
+    /// The section shows the CODE tab's languages instead of the graph.
+    code: bool,
+    languages: Option<Result<Vec<Share>, String>>,
+    languages_request: u64,
     card: Option<Card>,
     cwd: String,
     enabled: bool,
@@ -100,6 +113,9 @@ impl History {
             git,
             section,
             open: true,
+            code: false,
+            languages: None,
+            languages_request: 0,
             card: None,
             cwd: String::new(),
             enabled: false,
@@ -124,13 +140,13 @@ impl History {
         self.enabled = enabled;
         if enabled && !was {
             self.sync_project(cx);
-            self.load(cx);
+            self.refresh(cx);
         }
     }
     /// The window came back into focus.
     pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
         if self.enabled {
-            self.load(cx);
+            self.refresh(cx);
         }
     }
     fn git_changed(&mut self, cx: &mut Context<Self>) {
@@ -138,7 +154,59 @@ impl History {
             return;
         }
         self.sync_project(cx);
-        self.load(cx);
+        self.refresh(cx);
+    }
+    /// The saved tab choice, applied when the panel opens.
+    pub(crate) fn set_code(&mut self, code: bool, cx: &mut Context<Self>) {
+        if self.section && self.code != code {
+            self.code = code;
+            self.refresh(cx);
+            cx.notify();
+        }
+    }
+    /// Reread whatever the section shows: the languages or the commits.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.code {
+            if self.open {
+                self.load_languages(cx);
+            }
+        } else {
+            self.load(cx);
+        }
+    }
+    /// A label click switches the tab and unfolds the section.
+    fn choose(&mut self, code: bool, cx: &mut Context<Self>) {
+        let changed = self.code != code || !self.open;
+        self.open = true;
+        if self.code != code {
+            self.code = code;
+            cx.emit(HistoryEvent::Code(code));
+        }
+        if changed {
+            self.refresh(cx);
+        }
+        cx.notify();
+    }
+    fn load_languages(&mut self, cx: &mut Context<Self>) {
+        if !self.enabled || !self.available() {
+            return;
+        }
+        self.languages_request += 1;
+        let request = self.languages_request;
+        let cwd = self.cwd.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { monocode_core::languages::languages(&cwd, LANGUAGE_ROWS) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.languages_request == request {
+                    this.languages = Some(result);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
     /// A new checkout clears the search and opens on its cached history.
     fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
@@ -148,6 +216,8 @@ impl History {
         }
         self.cwd = root;
         self.request += 1;
+        self.languages_request += 1;
+        self.languages = None;
         self.loading = false;
         self.error = None;
         self.search_open = false;
@@ -503,12 +573,9 @@ impl History {
                         )
                 } else if self.section {
                     let open = self.open;
+                    let code = self.code;
                     d.child(
                         div()
-                            .id("history-section")
-                            .role(Role::Button)
-                            .aria_label("Graph")
-                            .aria_expanded(open)
                             .flex_1()
                             .min_w_0()
                             .h_full()
@@ -516,29 +583,44 @@ impl History {
                             .items_center()
                             .gap_1()
                             .child(
-                                icon(
-                                    if open {
-                                        "chevron-down"
-                                    } else {
-                                        "chevron-right"
-                                    },
-                                    14.,
-                                )
-                                .text_color(content(0.5)),
+                                div()
+                                    .id("history-section")
+                                    .role(Role::Button)
+                                    .aria_label(if code { "Code" } else { "Graph" })
+                                    .aria_expanded(open)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .child(
+                                        icon(
+                                            if open {
+                                                "chevron-down"
+                                            } else {
+                                                "chevron-right"
+                                            },
+                                            14.,
+                                        )
+                                        .text_color(content(0.5)),
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open = !this.open;
+                                        if this.open && this.code {
+                                            this.load_languages(cx);
+                                        }
+                                        cx.notify();
+                                    })),
                             )
                             .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(0.55))
-                                    .child("GRAPH"),
+                                section_tab("graph-tab", "GRAPH", !code)
+                                    .on_click(cx.listener(|this, _, _, cx| this.choose(false, cx))),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open = !this.open;
-                                cx.notify();
-                            })),
+                            .child(div().w(px(1.)).h(px(10.)).mx(px(4.)).bg(content(0.15)))
+                            .child(
+                                section_tab("code-tab", "CODE", code)
+                                    .on_click(cx.listener(|this, _, _, cx| this.choose(true, cx))),
+                            ),
                     )
-                    .when(open, |d| d.child(self.actions(can_refresh, cx)))
+                    .when(open && !code, |d| d.child(self.actions(can_refresh, cx)))
                 } else {
                     d.child(
                         div()
@@ -736,6 +818,37 @@ impl History {
                     ),
             )
     }
+}
+
+/// GRAPH and CODE in the section header: the chosen one bright and underlined.
+fn section_tab(id: &'static str, label: &'static str, active: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .role(Role::Tab)
+        .aria_label(label)
+        .aria_selected(active)
+        .group(id)
+        .h_full()
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .py(px(1.))
+                .border_b_1()
+                .text_size(px(10.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .map(|d| {
+                    if active {
+                        d.border_color(content(0.75)).text_color(content(0.85))
+                    } else {
+                        d.border_color(gpui::transparent_black())
+                            .text_color(content(0.4))
+                            .group_hover(id, |s| s.text_color(content(0.7)))
+                    }
+                })
+                .child(label),
+        )
 }
 
 /// HistoryToolbar's 24px actions: 50% ink, 5% hover.
@@ -976,31 +1089,37 @@ impl Render for History {
             .overflow_hidden()
             .child(self.toolbar(cx))
             .children(self.card(cx))
-            .when(!self.section || self.open, |d| match empty {
-                Some((text, centred)) => d.child(
-                    div()
-                        .px_3()
-                        .when(centred, |d| d.py_4().text_center())
-                        .when(!centred, |d| d.py_2())
-                        .text_size(px(12.))
-                        .text_color(content(0.45))
-                        .child(text),
-                ),
-                None if self.items.is_empty() => d,
-                None => d.child(
-                    uniform_list("history-rows", list_len, move |range, _, cx| {
-                        entity.update(cx, |this, cx| {
-                            range
-                                .filter_map(|i| this.visible.get(i).copied())
-                                .map(|ix| this.row(ix, cx).into_any_element())
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .track_scroll(&self.scroll)
-                    .flex_1()
-                    .min_h_0(),
-                ),
+            .when(self.code && self.open, |d| {
+                d.child(languages::view(self.languages.as_ref()))
             })
+            .when(
+                (!self.section || self.open) && !self.code,
+                |d| match empty {
+                    Some((text, centred)) => d.child(
+                        div()
+                            .px_3()
+                            .when(centred, |d| d.py_4().text_center())
+                            .when(!centred, |d| d.py_2())
+                            .text_size(px(12.))
+                            .text_color(content(0.45))
+                            .child(text),
+                    ),
+                    None if self.items.is_empty() => d,
+                    None => d.child(
+                        uniform_list("history-rows", list_len, move |range, _, cx| {
+                            entity.update(cx, |this, cx| {
+                                range
+                                    .filter_map(|i| this.visible.get(i).copied())
+                                    .map(|ix| this.row(ix, cx).into_any_element())
+                                    .collect::<Vec<_>>()
+                            })
+                        })
+                        .track_scroll(&self.scroll)
+                        .flex_1()
+                        .min_h_0(),
+                    ),
+                },
+            )
     }
 }
 
@@ -1014,6 +1133,70 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[gpui::test]
+    fn code_tab_swaps_the_graph_for_languages_and_back(cx: &mut gpui::TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("mcode-code-tab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.rs"), "fn main() {}\n".repeat(10)).unwrap();
+        std::fs::write(dir.join("app.ts"), "export {};\n").unwrap();
+        std::fs::write(dir.join("README.md"), "# Not code\n".repeat(50)).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let git = cx.new(|cx| ProjectGit::new(root, cx));
+                cx.new(|cx| {
+                    let mut graph = History::new(git, true, window, cx);
+                    graph.set_enabled(true, cx);
+                    graph
+                })
+            })
+            .unwrap()
+        });
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let entity = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+        let log = chosen.clone();
+        let _events = cx.update(|cx| {
+            cx.subscribe(&entity, move |_, event: &HistoryEvent, _| {
+                if let HistoryEvent::Code(code) = event {
+                    log.borrow_mut().push(*code);
+                }
+            })
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("history-languages").is_none());
+
+        let code = visual.debug_bounds("code-tab").unwrap();
+        visual.simulate_click(code.center(), Default::default());
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(
+            visual.debug_bounds("history-languages").is_some(),
+            "CODE shows the languages"
+        );
+        window
+            .update(visual, |graph, _, _| {
+                let shares = graph.languages.clone().unwrap().unwrap();
+                let names: Vec<_> = shares.iter().map(|s| s.name).collect();
+                assert_eq!(names, ["Rust", "TypeScript"], "Markdown isn't code");
+            })
+            .unwrap();
+        assert_eq!(*chosen.borrow(), [true]);
+
+        let graph = visual.debug_bounds("graph-tab").unwrap();
+        visual.simulate_click(graph.center(), Default::default());
+        visual.refresh().unwrap();
+        assert!(
+            visual.debug_bounds("history-languages").is_none(),
+            "GRAPH brings the graph back"
+        );
+        assert_eq!(*chosen.borrow(), [true, false]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn softened_lane_ink_mixes_toward_content() {
         let mixed = soft(0xFFB000);

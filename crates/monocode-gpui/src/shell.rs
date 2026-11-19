@@ -1023,10 +1023,12 @@ impl Shell {
         // files from the changes pill and its card.
         let git_changes = cx.subscribe(&git, |this, git, _: &crate::git_status::GitChanged, cx| {
             let cwd = git.read(cx).root.clone();
+            let branch = git.read(cx).index.as_ref().and_then(|i| i.branch.clone());
             for view in this.sessions.values() {
                 if view.read(cx).review.read(cx).session().1 == cwd {
                     view.update(cx, |view, cx| {
-                        view.review.update(cx, |review, cx| review.refresh(cx))
+                        view.review.update(cx, |review, cx| review.refresh(cx));
+                        view.follow_branch(branch.as_deref(), cx);
                     });
                 }
             }
@@ -2029,6 +2031,9 @@ impl Shell {
         ));
         let changes = panel.read(cx).changes.clone();
         changes.update(cx, |c, cx| c.set_view(view, cx));
+        let code = self.workspace.graph_code;
+        let graph = panel.read(cx).graph.clone();
+        graph.update(cx, |g, cx| g.set_code(code, cx));
         self.observations.push(
             cx.subscribe(&panel, move |this, _, event: &PanelEvent, cx| {
                 match event {
@@ -2076,12 +2081,19 @@ impl Shell {
                 &history,
                 window,
                 |this, _, event: &crate::history::HistoryEvent, window, cx| {
-                    let crate::history::HistoryEvent::OpenCommit {
-                        cwd,
-                        sha,
-                        short_sha,
-                        subject,
-                    } = event;
+                    let (cwd, sha, short_sha, subject) = match event {
+                        crate::history::HistoryEvent::Code(code) => {
+                            this.workspace.graph_code = *code;
+                            this.persist(cx);
+                            return;
+                        }
+                        crate::history::HistoryEvent::OpenCommit {
+                            cwd,
+                            sha,
+                            short_sha,
+                            subject,
+                        } => (cwd, sha, short_sha, subject),
+                    };
                     this.open_review(
                         crate::review::ReviewTab::Commit {
                             cwd: cwd.clone(),

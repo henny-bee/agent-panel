@@ -4,10 +4,12 @@
 //! one mutation at a time per checkout.
 use crate::{
     file_icons::file_type_icon,
+    git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
     git_status::{GitChanged, ProjectGit},
     input::{self, Input},
     popover::{
-        Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, menu_popover,
+        Align, Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, MenuItem, MenuStyle, Side,
+        menu_popover, popover,
     },
     right_panel::*,
     theme::*,
@@ -237,6 +239,9 @@ pub(crate) struct Changes {
     menu: Option<OpenMenu>,
     branch_anchor: AnchorSlot,
     commit_anchor: AnchorSlot,
+    /// The composer's branch picker, dropped down from the branch name.
+    branch_picker: Option<(Entity<GitPicker>, Subscription)>,
+    name_anchor: AnchorSlot,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<ChangesEvent> for Changes {}
@@ -273,10 +278,31 @@ impl Changes {
             menu: None,
             branch_anchor: AnchorSlot::default(),
             commit_anchor: AnchorSlot::default(),
+            branch_picker: None,
+            name_anchor: AnchorSlot::default(),
             _subscriptions: subscriptions,
         };
         this.rebuild(cx);
         this
+    }
+    fn toggle_branch_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.branch_picker.take().is_some() {
+            cx.notify();
+            return;
+        }
+        self.menu = None;
+        let cwd = PathBuf::from(&self.cwd);
+        let picker = cx.new(|cx| GitPicker::new(cwd, GitMode::Branch, None, cx));
+        let events = cx.subscribe(&picker, |this, _, event: &GitPicked, cx| {
+            if matches!(event, GitPicked::Changed) {
+                this.git.update(cx, |git, cx| git.changed(cx));
+            }
+            this.branch_picker = None;
+            cx.notify();
+        });
+        window.focus(&picker.read(cx).focus(cx), cx);
+        self.branch_picker = Some((picker, events));
+        cx.notify();
     }
     pub(crate) fn set_view(&mut self, view: ChangesView, cx: &mut Context<Self>) {
         self.view = view;
@@ -314,6 +340,7 @@ impl Changes {
             self.pr = None;
             self.pr_branch = None;
             self.selected = None;
+            self.branch_picker = None;
             self.message
                 .update(cx, |m, cx| m.set_text(String::new(), cx));
         }
@@ -972,11 +999,32 @@ impl Changes {
             .is_some_and(|m| m.kind == MenuKind::Branch);
         let branch = index.as_ref().and_then(|i| i.branch.clone());
         let index = index.unwrap_or_default();
+        let picker_open = self.branch_picker.is_some();
         pane_header("changes-header", "Changes")
             .when_some(branch.clone(), |d, branch| {
                 d.child(
                     div()
+                        .id("branch-switch")
+                        .debug_selector(|| "branch-switch".into())
+                        .role(Role::Button)
+                        .aria_label("Switch branch")
+                        .aria_expanded(picker_open)
+                        .relative()
+                        .child(self.name_anchor.probe())
                         .min_w_0()
+                        // The padding shows the hover; the margin keeps the text in place.
+                        .mx(px(-4.))
+                        .px(px(4.))
+                        .py(px(2.))
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(picker_open, |d| d.bg(content(0.1)))
+                        .when(!picker_open, |d| d.hover(|s| s.bg(content(0.05))))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.toggle_branch_picker(window, cx)
+                            }),
+                        )
                         .flex()
                         .items_center()
                         .gap_1()
@@ -1957,6 +2005,21 @@ impl Render for Changes {
             };
             menu_popover(&open.menu, Anchor::Slot(anchor), cx).align(Align::End)
         });
+        let picker = self.branch_picker.as_ref().map(|(picker, _)| {
+            let weak = cx.entity().downgrade();
+            popover("changes-git-picker", Anchor::Slot(self.name_anchor.clone()))
+                .side(Side::Bottom)
+                .align(Align::Start)
+                .width(300.)
+                .height(320.)
+                .on_dismiss(move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.branch_picker = None;
+                        cx.notify();
+                    });
+                })
+                .child(picker.clone())
+        });
         div()
             .id("changes")
             .role(Role::TabPanel)
@@ -1991,6 +2054,7 @@ impl Render for Changes {
                 ),
             })
             .children(menu)
+            .children(picker)
             .into_any_element()
     }
 }
@@ -2018,6 +2082,58 @@ mod tests {
                 assert_eq!(request, changes.pr_request);
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn clicking_the_branch_name_opens_and_closes_the_branch_picker(cx: &mut gpui::TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("mcode-branch-switch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        let root = dir.to_string_lossy().into_owned();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let git = cx.new(|cx| ProjectGit::new(root, cx));
+                cx.new(|cx| Changes::new(git, window, cx))
+            })
+            .unwrap()
+        });
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        assert!(visual.debug_bounds("git-picker").is_none());
+
+        let name = visual
+            .debug_bounds("branch-switch")
+            .expect("the branch name is a button");
+        visual.simulate_click(name.center(), Default::default());
+        visual.refresh().unwrap();
+        assert!(
+            visual.debug_bounds("git-picker").is_some(),
+            "the branch list drops down"
+        );
+
+        let name = visual.debug_bounds("branch-switch").unwrap();
+        visual.simulate_click(name.center(), Default::default());
+        visual.refresh().unwrap();
+        assert!(
+            visual.debug_bounds("git-picker").is_none(),
+            "a second click closes it"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
     fn f(relative: &str, status: &str) -> ChangedFile {
         ChangedFile {

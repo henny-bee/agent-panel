@@ -114,6 +114,8 @@ pub(crate) struct Workspace {
     /// own (Explorer, Changes, History and the change count), by pane id.
     pub panel_folders: HashMap<i64, String>,
     pub changes_view: crate::changes::ChangesView,
+    /// The section under Changes shows CODE's languages instead of GRAPH.
+    pub graph_code: bool,
     /// Each tab's file/review pane beside its chat.
     pub reviews: std::collections::HashMap<i64, crate::review::ReviewState>,
     /// Independent file panes use negative IDs in the layout tree. Their
@@ -367,6 +369,7 @@ impl Default for Workspace {
             pane_panels: Default::default(),
             panel_folders: Default::default(),
             changes_view: Default::default(),
+            graph_code: false,
             reviews: Default::default(),
             review_owners: Default::default(),
             terminal_panes: Default::default(),
