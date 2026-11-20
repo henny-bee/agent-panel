@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - On Windows, MCode gives memory back when it sits idle or in the background. It used to keep every letter, icon and image it had drawn.
+- **Run in Background** no longer lists a subagent's commands after the subagent failed or was stopped, or a monitor after Claude stopped it. They used to stay with their timers counting.
 
 ## [mcode-v0.1.0] - 2026-11-20
 

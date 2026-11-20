@@ -211,8 +211,15 @@ impl Tracker {
         }
         builtin.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let finished: HashSet<&String> = logs().flat_map(|log| &log.finished).collect();
-        let mut background: Vec<Background> = logs()
-            .flat_map(|log| &log.background)
+        // An agent that fails or is stopped takes its shells and monitors with
+        // it, and they leave no notice; one that completes leaves them running.
+        let killed = |id: &String| logs().filter_map(|log| log.killed.get(id)).max().copied();
+        let mut background: Vec<Background> = std::iter::once((&self.main, None))
+            .chain(self.agents.iter().map(|(id, a)| (&a.log, killed(id))))
+            .flat_map(|(log, end)| {
+                let tasks = log.background.iter();
+                tasks.filter(move |t| end.is_none_or(|at| t.shown.started > at))
+            })
             .filter(|t| !finished.contains(&t.tool_id) && !finished.contains(&t.task_id))
             .filter(|t| t.until.is_none_or(|until| now < until))
             // A background agent also ends when its own transcript says so.
