@@ -67,7 +67,10 @@ The panels update the moment Claude writes to its chat log, without polling ever
 
 ## Install
 
-There are no prebuilt MCode releases yet, so [build it from source](#build-from-source). Monocode's own packages, on the [Monocode releases page](https://github.com/hardbeat920/monocode/releases), don't include MCode's changes.
+- **Windows:** download the `windows-x64` zip from the [releases page](https://github.com/henny-bee/agent-panel/releases), unzip it and run `monocode-gpui.exe`. The app isn't code-signed, so the first time Windows SmartScreen may warn you: choose **More info**, then **Run anyway**.
+- **macOS and Linux:** [build it from source](#build-from-source).
+
+Monocode's own packages, on the [Monocode releases page](https://github.com/hardbeat920/monocode/releases), don't include MCode's changes.
 
 First install and sign in to at least one agent CLI. See [provider setup](docs/providers.md).
 

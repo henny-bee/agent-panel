@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [mcode-v0.1.0] - 2026-11-20
+
+MCode's first release. The app's internal version stays 0.16.0, the Monocode
+version it's based on, because remote sessions download Monocode's host by that
+number.
+
 ### Added
 
 - Claude sessions get two views in the Explorer. **Agents** lists the subagents a chat started, with their steps, tokens and time, plus the chat's estimated cost. **In this chat** shows what Claude used: the to-do list, MCP servers, tools, files, context files and skills.

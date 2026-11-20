@@ -1,6 +1,8 @@
 # Install MCode
 
-MCode has no prebuilt releases yet. Build it from source as described in [building](building.md), then run the app it produces:
+On Windows, download the `windows-x64` zip from the [releases page](https://github.com/henny-bee/agent-panel/releases), unzip it and run `monocode-gpui.exe`. It isn't code-signed, so the first time Windows SmartScreen may warn you: choose **More info**, then **Run anyway**.
+
+On macOS and Linux, and on Windows if you prefer, build it from source as described in [building](building.md), then run the app it produces:
 
 | Platform | Run |
 | --- | --- |
@@ -37,8 +39,8 @@ crates/monocode-gpui/target/release/monocode-gpui --check-data
 
 ## Updates
 
-MCode doesn't update itself: its update check says automatic updates aren't configured for this build. To update, pull the latest code and build again. On Windows, close MCode first, because a running program can't be replaced.
+MCode doesn't update itself: its update check says automatic updates aren't configured for this build. To update, download the newest release, or pull the latest code and build again. On Windows, close MCode first, because a running program can't be replaced.
 
 ## Uninstall
 
-Delete the repository folder or its `crates/monocode-gpui/target` folder. Your data folder stays, because Monocode uses it too. Delete it yourself only if you no longer use Monocode either.
+Delete the folder you unzipped the release into, or the repository folder or its `crates/monocode-gpui/target` folder. Your data folder stays, because Monocode uses it too. Delete it yourself only if you no longer use Monocode either.
