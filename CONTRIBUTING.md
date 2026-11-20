@@ -48,7 +48,7 @@ CI runs clippy and the tests for the app on macOS. On Linux and Windows, some UI
 
 Keep a pull request to one change, and say what changed and why. The [PR template](.github/pull_request_template.md) covers the rest. If it changes the UI, add a before and after screenshot.
 
-Write short commit messages: one imperative subject line, such as `Add blur slider for chat backgrounds`.
+Write short commit messages as `type(area): what it does now`, such as `feat(chat): add blur slider for chat backgrounds`. Add a few bullets under it only when a change has several parts. Name branches `type/short-desc`, such as `fix/12-graph-after-switch`.
 
 I may ask you to shrink a pull request, or close it if it doesn't fit the project. That's about scope and timing, not about you or the quality of your work.
 

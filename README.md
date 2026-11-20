@@ -74,11 +74,11 @@ First install and sign in to at least one agent CLI. See [provider setup](docs/p
 > [!WARNING]
 > MCode uses your existing Monocode database and saves changes there. Back up its folder with the app closed before you try MCode, and don't edit the same conversations in Monocode and MCode at the same time.
 >
-> | Platform | Data folder |
-> | --- | --- |
-> | Windows | `%APPDATA%\com.monocode.desktop\` |
-> | macOS | `~/Library/Application Support/com.monocode.desktop/` |
-> | Linux | `~/.local/share/com.monocode.desktop/` |
+> | Platform | Data folder                                           |
+> | -------- | ----------------------------------------------------- |
+> | Windows  | `%APPDATA%\com.monocode.desktop\`                     |
+> | macOS    | `~/Library/Application Support/com.monocode.desktop/` |
+> | Linux    | `~/.local/share/com.monocode.desktop/`                |
 
 ## Build from source
 
@@ -101,10 +101,10 @@ Then build the app from the repository root:
 cargo build --manifest-path crates/monocode-gpui/Cargo.toml --locked -p monocode-gpui --release
 ```
 
-| Platform | The app |
-| --- | --- |
-| Windows | `crates\monocode-gpui\target\release\monocode-gpui.exe` |
-| macOS and Linux | `crates/monocode-gpui/target/release/monocode-gpui` |
+| Platform        | The app                                                 |
+| --------------- | ------------------------------------------------------- |
+| Windows         | `crates\monocode-gpui\target\release\monocode-gpui.exe` |
+| macOS and Linux | `crates/monocode-gpui/target/release/monocode-gpui`     |
 
 With Node.js 22+ you can also use the npm scripts:
 
@@ -143,10 +143,6 @@ Bug reports and small, focused pull requests are welcome. Read [CONTRIBUTING.md]
 ## Credits
 
 MCode is built on Monocode by hardbeat920 and the Monocode contributors.
-
-[![Monocode contributors](https://contrib.rocks/image?repo=hardbeat920/monocode)](https://github.com/hardbeat920/monocode/graphs/contributors)
-
-Contributor image by [contrib.rocks](https://contrib.rocks). Third-party code, icons and their licences are listed in [NOTICE](NOTICE).
 
 ## License
 
