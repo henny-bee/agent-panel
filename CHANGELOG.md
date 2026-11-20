@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The New tab menu (the arrow next to **+**) has **New Claude Session (Terminal)** and **New Claude Session (Chat)**, to open one Claude session in the Claude Code CLI or in the chat without changing Settings.
+
 ### Fixed
 
 - On Windows, MCode gives memory back when it sits idle or in the background. It used to keep every letter, icon and image it had drawn.

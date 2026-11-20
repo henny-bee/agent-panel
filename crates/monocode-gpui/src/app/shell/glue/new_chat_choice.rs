@@ -12,6 +12,9 @@ use crate::ui::preferences::Preferences;
 pub(crate) struct NewChatChoice {
     pub kind: Kind,
     pub model: Option<String>,
+    /// Shows a Claude session as the CLI (`true`) or the chat (`false`)
+    /// whatever Settings says; `None` follows Settings.
+    pub terminal: Option<bool>,
 }
 
 impl NewChatChoice {
@@ -20,7 +23,11 @@ impl NewChatChoice {
         Self::of(kind, default_model(prefs, cwd, kind))
     }
     fn of(kind: Kind, model: Option<String>) -> Self {
-        Self { kind, model }
+        Self {
+            kind,
+            model,
+            terminal: None,
+        }
     }
 }
 
@@ -34,7 +41,8 @@ fn default_model(prefs: &Preferences, cwd: &str, kind: Kind) -> Option<String> {
         .cloned()
 }
 
-fn allowed(prefs: &Preferences, cwd: &str, kind: Kind) -> bool {
+/// Whether `kind` may start a session in `cwd`.
+pub(crate) fn allowed(prefs: &Preferences, cwd: &str, kind: Kind) -> bool {
     monocode_core::files::remote::parse_remote_path(cwd).is_some()
         || !prefs.hidden_for(cwd).iter().any(|id| id == kind.id())
 }

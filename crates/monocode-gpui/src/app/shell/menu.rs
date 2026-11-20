@@ -109,21 +109,45 @@ impl Shell {
                 200.,
                 MenuStyle::Explorer,
             ),
-            MenuTarget::NewTab => (
-                "New tab".into(),
-                vec![
-                    MenuAction::new("session", "New Session")
-                        .icon("plus")
-                        .shortcut(format!("{MOD}N"))
-                        .into(),
-                    MenuAction::new("terminal", "New Terminal")
-                        .icon("terminal")
-                        .shortcut(format!("{MOD}J"))
-                        .into(),
-                ],
-                200.,
-                MenuStyle::Explorer,
-            ),
+            MenuTarget::NewTab => {
+                let project = &self.workspace.project;
+                let claude = glue::new_chat_choice::allowed(
+                    &self.workspace.preferences,
+                    project,
+                    Kind::Claude,
+                );
+                // Remote projects always show Claude as a chat.
+                let cli = claude && !project.starts_with("remote://");
+                (
+                    "New tab".into(),
+                    [
+                        Some(
+                            MenuAction::new("session", "New Session")
+                                .icon("plus")
+                                .shortcut(format!("{MOD}N")),
+                        ),
+                        cli.then(|| {
+                            MenuAction::new("claude-terminal", "New Claude Session (Terminal)")
+                                .image(Kind::Claude.id())
+                        }),
+                        claude.then(|| {
+                            MenuAction::new("claude-chat", "New Claude Session (Chat)")
+                                .image(Kind::Claude.id())
+                        }),
+                        Some(
+                            MenuAction::new("terminal", "New Terminal")
+                                .icon("terminal")
+                                .shortcut(format!("{MOD}J")),
+                        ),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into)
+                    .collect(),
+                    260.,
+                    MenuStyle::Explorer,
+                )
+            }
             // The model picker a conversation shows, starting a session instead.
             MenuTarget::NewTabModel => {
                 let choice = self.default_choice();
@@ -150,6 +174,7 @@ impl Shell {
                         let choice = glue::new_chat_choice::NewChatChoice {
                             kind: picked.0,
                             model: picked.1.clone(),
+                            terminal: None,
                         };
                         this.create_session(choice, false, cx);
                     },
@@ -581,6 +606,11 @@ impl Shell {
             MenuTarget::Actions => self.run_actions_menu(action, window, cx),
             MenuTarget::NewTab => match action {
                 "terminal" => self.new_title_terminal(window, cx),
+                "claude-terminal" | "claude-chat" => {
+                    let mut choice = self.explicit_choice(Kind::Claude);
+                    choice.terminal = Some(action == "claude-terminal");
+                    self.create_session(choice, false, cx);
+                }
                 _ => self.new_chat(cx),
             },
             // Its list reports the pick itself.
