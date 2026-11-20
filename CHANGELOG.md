@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Click an MCP server in **In this chat** to see its tools and how often each was called.
 - A **Graph** section under **Changes** shows the commit history, with a divider to resize it.
 - Click the branch name in **Changes** to switch to another branch or create one.
-- A **CODE** tab next to **GRAPH** shows the project's languages, like GitHub's Languages bar. MCode remembers which tab you chose.
+- A **CODE** tab next to **GRAPH** shows the project's languages, like GitHub's Languages bar. It knows about 100 languages, including GDScript, GDShader and HolyC. MCode remembers which tab you chose.
 - Each split pane can open its own project panel, with its own tab, width and Git status.
 - A folder box at the top of the Explorer shows any folder you type or pick.
 - Opening the app again adds a window to the running app, and windows share live sessions.

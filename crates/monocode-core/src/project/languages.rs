@@ -140,7 +140,11 @@ fn language(path: &str) -> Option<((&'static str, u32), &'static str)> {
         "py" | "pyi" | "pyw" => ("Python", 0x3572a5, "x.py"),
         "go" => ("Go", 0x00add8, "x.go"),
         "c" | "h" => ("C", 0x555555, "x.c"),
-        "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" => ("C++", 0xf34b7d, "x.cpp"),
+        "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h++" | "ino" => {
+            ("C++", 0xf34b7d, "x.cpp")
+        }
+        // HolyC has no icon of its own; it is a C dialect.
+        "hc" => ("HolyC", 0xffefaf, "x.c"),
         "cs" => ("C#", 0x178600, "x.cs"),
         "m" => ("Objective-C", 0x438eff, "x.m"),
         "mm" => ("Objective-C++", 0x6866fb, "x.mm"),
@@ -186,6 +190,49 @@ fn language(path: &str) -> Option<((&'static str, u32), &'static str)> {
         "el" => ("Emacs Lisp", 0xc065db, "x.el"),
         "tex" => ("TeX", 0x3d6117, "x.tex"),
         "ipynb" => ("Jupyter Notebook", 0xda5b0b, "x.ipynb"),
+        "mk" | "mak" => ("Makefile", 0x427819, "Makefile"),
+        "gd" => ("GDScript", 0x355570, "x.gd"),
+        "gdshader" | "gdshaderinc" => ("GDShader", 0x478cbf, "x.gdshader"),
+        "shader" => ("ShaderLab", 0x222c37, "x.shader"),
+        "luau" => ("Luau", 0x00a2ff, "x.luau"),
+        "gml" => ("Game Maker Language", 0x71b417, "x.gml"),
+        "hx" => ("Haxe", 0xdf7900, "x.hx"),
+        "rpy" => ("Ren'Py", 0xff7f7f, "x.rpy"),
+        "odin" => ("Odin", 0x60affe, "x.odin"),
+        "mojo" => ("Mojo", 0xff4c1f, "x.mojo"),
+        "cr" => ("Crystal", 0x000100, "x.cr"),
+        "adb" | "ads" | "ada" => ("Ada", 0x02f88c, "x.adb"),
+        "pas" | "dpr" | "lpr" => ("Pascal", 0xe3f171, "x.pas"),
+        "f90" | "f95" | "f03" | "f08" => ("Fortran", 0x4d41b1, "x.f90"),
+        "cu" | "cuh" => ("Cuda", 0x3a4e3a, "x.cu"),
+        "wat" | "wast" => ("WebAssembly", 0x04133b, "x.wat"),
+        "sv" | "svh" => ("SystemVerilog", 0xdae1c2, "x.sv"),
+        "vhd" | "vhdl" => ("VHDL", 0xadb2cb, "x.vhd"),
+        "lisp" | "lsp" => ("Common Lisp", 0x3fb68b, "x.lisp"),
+        "scm" | "ss" => ("Scheme", 0x1e4aec, "x.scm"),
+        "rkt" => ("Racket", 0x3c5caa, "x.rkt"),
+        "sml" => ("Standard ML", 0xdc566d, "x.sml"),
+        "idr" => ("Idris", 0xb30000, "x.idr"),
+        "purs" => ("PureScript", 0x1d222d, "x.purs"),
+        "groovy" | "gvy" => ("Groovy", 0x4298b8, "x.groovy"),
+        "raku" | "rakumod" | "p6" => ("Raku", 0x0000fb, "x.raku"),
+        "tcl" => ("Tcl", 0xe4cc98, "x.tcl"),
+        "ahk" | "ah2" => ("AutoHotkey", 0x6594b9, "x.ahk"),
+        "nu" => ("Nushell", 0x4e9906, "x.nu"),
+        "moon" => ("MoonScript", 0xff4585, "x.moon"),
+        "applescript" => ("AppleScript", 0x101f1f, "x.applescript"),
+        "coffee" => ("CoffeeScript", 0x244776, "x.coffee"),
+        "bal" => ("Ballerina", 0xff5000, "x.bal"),
+        "bf" => ("Brainfuck", 0x2f2530, "x.bf"),
+        "hbs" | "handlebars" => ("Handlebars", 0xf7931e, "x.hbs"),
+        "pug" | "jade" => ("Pug", 0xa86454, "x.pug"),
+        "ejs" => ("EJS", 0xa91e50, "x.ejs"),
+        "liquid" => ("Liquid", 0x67b8de, "x.liquid"),
+        "twig" => ("Twig", 0xc1d026, "x.twig"),
+        "typ" => ("Typst", 0x239dad, "x.typ"),
+        "qml" => ("QML", 0x44a51c, "x.qml"),
+        "bzl" | "star" => ("Starlark", 0x76d275, "x.bzl"),
+        "rego" => ("Open Policy Agent", 0x7d9199, "x.rego"),
         _ => return None,
     };
     Some(((language, color), sample))
@@ -279,5 +326,22 @@ mod tests {
             shares.iter().map(|s| s.name).collect::<Vec<_>>(),
             ["Makefile", "Dockerfile"]
         );
+    }
+
+    #[test]
+    fn game_and_niche_languages_go_by_extension() {
+        let name = |path| language(path).map(|((name, _), _)| name);
+        assert_eq!(name("game/player.gd"), Some("GDScript"));
+        assert_eq!(name("game/water.gdshader"), Some("GDShader"));
+        assert_eq!(name("Kernel/KMain.HC"), Some("HolyC"));
+        assert_eq!(name("game/script.rpy"), Some("Ren'Py"));
+        assert_eq!(name("sketch/blink.ino"), Some("C++"));
+        assert_eq!(name("build/rules.mk"), Some("Makefile"));
+        // Shared by several languages, so a guess would misreport some projects.
+        for path in ["rtl/top.v", "manifests/site.pp", "app.pro", "out/main.d"] {
+            assert_eq!(name(path), None, "{path}");
+        }
+        // Data, not code, as on GitHub.
+        assert_eq!(name("game/main.tscn"), None);
     }
 }
