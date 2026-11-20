@@ -1,6 +1,7 @@
 //! Cuts at a past user message. Edit recalls it and cuts only when the user
 //! resubmits, Rewind cuts after a confirm, and Fork cuts a copy into a new chat.
-// Every cut is conversation only: no provider path here changes files on disk.
+//! Rewind and Edit can also restore files where the provider keeps checkpoints;
+//! Fork never does.
 use super::*;
 use crate::chat::response_actions::Cut;
 use monocode_core::{provider, store::EditSnapshot};
@@ -13,8 +14,9 @@ pub(super) struct State {
     /// A confirmed provider mutation followed by a storage conflict requires a
     /// history reload, rather than silently appending to inconsistent context.
     blocked: bool,
-    /// The user confirmed the rewind that sending the prepared edit performs.
-    confirmed: bool,
+    /// The user confirmed the rewind that sending the prepared edit performs,
+    /// and whether it restores files too.
+    confirmed: Option<bool>,
 }
 impl State {
     pub(super) fn pending(&self) -> bool {
@@ -114,29 +116,44 @@ impl Conversation {
                     && !self.input.read(cx).is_composing()
                     && self.attachments.is_empty()))
     }
-    /// Asks before a cut. `then` runs only when the first button is chosen.
+    /// Asks before a cut. When the cut can restore files (`files`), the user
+    /// picks "Code and conversation" or "Conversation only" instead of
+    /// `action`. `then` gets whether to restore files, unless cancelled.
     fn confirm_cut(
         &mut self,
         title: &'static str,
         detail: String,
         action: &'static str,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        files: bool,
+        then: impl FnOnce(&mut Self, bool, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
+        let (detail, answers) = if files {
+            (
+                format!(
+                    "{detail}\n\nChanges made through shell commands aren't reverted. Commits stay in place."
+                ),
+                vec!["Code and conversation", "Conversation only", "Cancel"],
+            )
+        } else {
+            (detail, vec![action, "Cancel"])
+        };
         cx.spawn(async move |this, cx| {
             let Ok(answer) = this.update_in(cx, |_, window, cx| {
                 window.prompt(
                     gpui::PromptLevel::Warning,
                     title,
                     Some(detail.as_str()),
-                    &[action, "Cancel"],
+                    &answers,
                     cx,
                 )
             }) else {
                 return;
             };
-            if answer.await == Ok(0) {
-                let _ = this.update(cx, then);
+            if let Ok(choice) = answer.await
+                && choice + 1 < answers.len()
+            {
+                let _ = this.update(cx, |this, cx| then(this, files && choice == 0, cx));
             }
         })
         .detach();
@@ -179,11 +196,13 @@ impl Conversation {
                 Some((at, _)) => format!("“{}…”", &text[..at]),
                 None => format!("“{text}”"),
             };
+            let files = provider::restores_files(Kind::from_id(&self.summary.provider), rows, turn);
             self.confirm_cut(
                 "Rewind to this message?",
                 preview,
                 "Rewind",
-                move |this, cx| this.prepare_cut(turn, cut, cx),
+                files,
+                move |this, files, cx| this.prepare_cut(turn, cut, files, cx),
                 cx,
             );
             return;
@@ -191,9 +210,10 @@ impl Conversation {
         if cut == Cut::Edit {
             window.focus(&self.input.focus_handle(cx), cx);
         }
-        self.prepare_cut(turn, cut, cx);
+        self.prepare_cut(turn, cut, false, cx);
     }
-    fn prepare_cut(&mut self, turn: usize, cut: Cut, cx: &mut Context<Self>) {
+    /// `files` restores files too; only Rewind passes it here.
+    fn prepare_cut(&mut self, turn: usize, cut: Cut, files: bool, cx: &mut Context<Self>) {
         if !self.can_prepare_edit(cut, cx) {
             return;
         }
@@ -232,7 +252,7 @@ impl Conversation {
                             this.attachments = edit.attachments.clone();
                             this.editing_last_turn.prepared = Some(edit.clone());
                             if cut == Cut::Rewind {
-                                this.run_cut(edit, false, cx);
+                                this.run_cut(edit, false, files, cx);
                             } else {
                                 this.status =
                                     "Editing message — sending it restarts from here".into();
@@ -312,20 +332,26 @@ impl Conversation {
             cx.notify();
             return true;
         }
-        if !confirmed {
+        let Some(files) = confirmed else {
+            let files = provider::restores_files(
+                Kind::from_id(&self.summary.provider),
+                &edit.rows,
+                edit.start,
+            );
             self.confirm_cut(
                 "Rewind and send this edit?",
                 "Your edit replaces the original message. Everything after it is removed.".into(),
                 "Rewind and send",
-                |this, cx| {
-                    this.editing_last_turn.confirmed = true;
+                files,
+                |this, files, cx| {
+                    this.editing_last_turn.confirmed = Some(files);
                     this.send(cx);
                 },
                 cx,
             );
             return true;
-        }
-        self.run_cut(edit, true, cx);
+        };
+        self.run_cut(edit, true, files, cx);
         true
     }
     /// The request a cut sends to the provider: the message's text, which
@@ -359,8 +385,9 @@ impl Conversation {
     }
     /// Cuts this conversation before the prepared message, in the provider and
     /// then locally. `send` sends the composer afterwards (Edit); otherwise the
-    /// recalled message waits in the composer (Rewind).
-    fn run_cut(&mut self, edit: EditSnapshot, send: bool, cx: &mut Context<Self>) {
+    /// recalled message waits in the composer (Rewind). `files` restores files
+    /// first, and a failed restore cuts nothing.
+    fn run_cut(&mut self, edit: EditSnapshot, send: bool, files: bool, cx: &mut Context<Self>) {
         let Some(request) = self.cut_request(&edit, cx) else {
             return;
         };
@@ -380,8 +407,8 @@ impl Conversation {
             }
             locked(&store)?.validate_edit(id, &edit)?;
             // Nothing the user said comes before the cut, so the next send
-            // starts a fresh provider session.
-            let binding = if edit.first() {
+            // starts a fresh provider session. Restoring files still needs it.
+            let binding = if edit.first() && !files {
                 None
             } else {
                 match provider::rewind_to(
@@ -389,6 +416,7 @@ impl Conversation {
                     edit.provider_turn_id.as_deref(),
                     edit.later(),
                     edit.sent_at(),
+                    files,
                 ) {
                     Ok(binding) => binding,
                     Err(error) if error.provider_may_have_changed => {
@@ -404,6 +432,9 @@ impl Conversation {
                 Ok(()) => Ok((edit, binding)),
                 Err(error) if in_place => Err(format!(
                     "Provider recovery required: Provider rewound, but local history changed: {error}"
+                )),
+                Err(error) if files => Err(format!(
+                    "Restored the code, but couldn't rewind the conversation. Try rewinding again. ({error})"
                 )),
                 Err(error) => Err(error),
             }
@@ -444,7 +475,13 @@ impl Conversation {
                             this.editing_last_turn.prepared = None;
                             this.status = format!("{error}. Choose Cancel edit to continue here anyway; your draft is preserved.");
                         } else {
-                            this.status = format!("Could not rewind: {error}. The message is in the box; send it to retry, or cancel the edit.");
+                            // Restore messages already say what happened.
+                            let lead = if error.starts_with("Couldn't") || error.starts_with("Restored") {
+                                ""
+                            } else {
+                                "Could not rewind: "
+                            };
+                            this.status = format!("{lead}{}. The message is in the box; send it to retry, or cancel the edit.", error.trim_end_matches('.'));
                         }
                     }
                 }
@@ -475,6 +512,7 @@ impl Conversation {
                     edit.provider_turn_id.as_deref(),
                     edit.later(),
                     edit.sent_at(),
+                    false,
                 )
                 .map_err(|error| error.to_string())?
             };

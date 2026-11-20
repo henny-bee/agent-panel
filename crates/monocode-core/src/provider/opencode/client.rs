@@ -354,21 +354,20 @@ impl Client {
             .map(str::to_owned)
             .ok_or_else(|| "OpenCode fork returned no session id".into())
     }
-    pub fn revert(&self, session: &str, message: &str) -> Result<(), String> {
+    /// Removes the message `message` and everything after it, restoring the files
+    /// OpenCode changed since. v2 stages the revert, then commits it.
+    pub fn revert(&self, session: &str, message: &str) -> Result<(), rewind::RewindError> {
         let base = format!("/session/{}", encode(session));
-        if self.v2 {
-            self.request(
-                "POST",
-                &self.path(&format!("{base}/revert/stage")),
-                Some(json!({"messageID":message})),
-            )?;
-            self.request("POST", &self.path(&format!("{base}/revert/commit")), None)?;
+        let first = if self.v2 {
+            self.path(&format!("{base}/revert/stage"))
         } else {
-            self.request(
-                "POST",
-                &format!("{base}/revert"),
-                Some(json!({"messageID":message})),
-            )?;
+            format!("{base}/revert")
+        };
+        self.request("POST", &first, Some(json!({"messageID":message})))
+            .map_err(|error| revert_error(error, false))?;
+        if self.v2 {
+            self.request("POST", &self.path(&format!("{base}/revert/commit")), None)
+                .map_err(|error| revert_error(error, true))?;
         }
         Ok(())
     }
@@ -430,7 +429,8 @@ impl Client {
         }
         failures.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         if let Some((message, _)) = failures.first() {
-            self.revert(session, message)?;
+            self.revert(session, message)
+                .map_err(|error| error.message)?;
         }
         Ok(())
     }
@@ -579,6 +579,14 @@ impl Client {
             )
         };
         self.request("POST", &path, Some(body)).map(|_| ())
+    }
+}
+/// A definite HTTP 4xx refusal before anything was staged changed nothing.
+/// Any other failure may have left the session reverted.
+pub(super) fn revert_error(message: String, staged: bool) -> rewind::RewindError {
+    rewind::RewindError {
+        provider_may_have_changed: staged || !message.starts_with("OpenCode HTTP 4"),
+        message,
     }
 }
 pub(super) fn encode(value: &str) -> String {

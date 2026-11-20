@@ -48,6 +48,28 @@ pub fn supports_fork(kind: Kind) -> bool {
     supports_rewind(kind) && kind != Kind::Codex
 }
 
+/// Whether a cut at row `at` can offer to restore files: the provider keeps
+/// file checkpoints, and the agent edited files from that message on.
+pub fn restores_files(kind: Kind, rows: &[crate::session::transcript::Row], at: usize) -> bool {
+    use crate::session::tool::ToolCall;
+    // Shell commands count as no edit: no provider can restore what they did.
+    let edits = |tool: ToolCall| {
+        matches!(tool.summary().0.as_str(), "Edit" | "Write")
+            // Edits the tool presentation leaves under their own name.
+            || matches!(
+                tool.name.to_lowercase().as_str(),
+                "multiedit" | "notebookedit" | "patch" | "apply_patch"
+            )
+    };
+    matches!(kind, Kind::Claude | Kind::OpenCode)
+        && rows
+            .get(at..)
+            .into_iter()
+            .flatten()
+            .filter(|row| row.role == "tool")
+            .any(|row| serde_json::from_str(&row.text).is_ok_and(edits))
+}
+
 const CLAUDE_AT: &str = "?at=";
 
 /// Splits a Claude binding into its session and the entry a pending rewind
@@ -153,14 +175,15 @@ pub fn claude_first_prompt(
 
 /// Finds the prompt `later` prompts before the end of the active chain, which
 /// ends at `from` or else at the transcript's last entry. Returns the entry
-/// before that prompt, or None when nothing precedes it. `expected` is the
-/// message being cut at: a prompt with different text is left alone.
+/// before that prompt (None when nothing precedes it) and the prompt's own id.
+/// `expected` is the message being cut at: a prompt with different text is
+/// left alone.
 fn claude_boundary(
     transcript: &str,
     expected: &str,
     mut later: usize,
     from: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<(Option<String>, String), String> {
     let mut entries = HashMap::new();
     let mut cursor = None;
     for line in transcript.lines().filter(|line| line.contains("\"uuid\"")) {
@@ -187,7 +210,10 @@ fn claude_boundary(
     }
     // A chain is never longer than the transcript; the bound only stops a cycle.
     for _ in 0..entries.len() {
-        let Some((parent, prompt)) = cursor.take().and_then(|id| entries.get(&id)) else {
+        let Some((id, (parent, prompt))) = cursor
+            .take()
+            .and_then(|id| entries.get(&id).map(|entry| (id, entry)))
+        else {
             break;
         };
         cursor = parent.clone();
@@ -204,54 +230,31 @@ fn claude_boundary(
                     .into(),
             );
         }
-        return Ok(parent.clone());
+        return Ok((parent.clone(), id));
     }
     Err("Claude did not save this message; history was preserved".into())
 }
 
-/// Claude has no in-process rollback. This asks the CLI whether a resume that
-/// ends just before the prompt being cut would be accepted, without sending a
-/// prompt, and returns the binding that makes the next launch perform it.
-fn claude_rewind(request: &Request, later: usize) -> Result<Option<String>, RewindError> {
-    let binding = request
-        .provider_id
-        .as_deref()
-        .filter(|id| !id.trim().is_empty())
-        .ok_or("The conversation has no saved provider session to rewind")?;
-    // A pending rewind already ends the conversation at its entry.
-    let (session, pending) = claude_resume(binding);
-    let transcript = claude_transcript(&request.settings.account, session)
-        .ok_or("Could not find the Claude conversation to rewind")?;
-    let transcript = std::fs::read_to_string(transcript)
-        .map_err(|error| format!("Could not read the Claude conversation: {error}"))?;
-    let Some(at) = claude_boundary(&transcript, &request.prompt, later, pending)? else {
-        return Ok(None);
-    };
-    let binding = format!("{session}{CLAUDE_AT}{at}");
-    // The warm process still holds the turns about to be dropped.
-    parked::discard_session(request);
+/// `claude --resume <session> --rewind-files <prompt>` puts files back as they
+/// were at that prompt, then exits. Only edits made while file checkpointing
+/// was on (see `Profile::apply`) have checkpoints.
+fn claude_rewind_files(request: &Request, session: &str, prompt: &str) -> Result<Command, String> {
     let mut command = Command::new(&request.binary);
     crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
     command.envs(&request.settings.environment);
     request.settings.account.apply(Kind::Claude, &mut command)?;
-    command.args([
-        "--verbose",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--strict-mcp-config",
-        "--mcp-config",
-        "{\"mcpServers\":{}}",
-        "--settings",
-        "{\"disableAllHooks\":true}",
-    ]);
-    claude_resume_args(&mut command, &binding);
-    // With no input the CLI loads the truncated session, writes nothing and exits.
     command
-        .current_dir(&request.cwd)
+        .args(["--resume", session, "--rewind-files", prompt])
+        .current_dir(&request.cwd);
+    Ok(command)
+}
+
+/// Runs a Claude command that reads no input and writes little. Returns the
+/// first line it wrote when it fails, stderr first, or `refused` when none.
+fn run_claude(mut command: Command, refused: &str) -> Result<(), String> {
+    command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     process::isolate(&mut command);
     let mut child = command
@@ -264,22 +267,86 @@ fn claude_rewind(request: &Request, later: usize) -> Result<Option<String>, Rewi
             Ok(None) if started.elapsed() < Duration::from_secs(60) => thread::sleep(TICK),
             _ => {
                 process::terminate(&mut child);
-                return Err("Claude did not confirm the rewind; history was preserved".into());
+                return Err("Claude did not answer within a minute".into());
             }
         }
     };
-    if !status.success() {
-        let mut detail = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = stderr.read_to_string(&mut detail);
-        }
-        let detail = detail.lines().find(|line| !line.trim().is_empty());
-        return Err(detail
-            .unwrap_or("Claude refused the rewind; history was preserved")
-            .trim()
-            .into());
+    if status.success() {
+        return Ok(());
     }
-    Ok(Some(binding))
+    let mut detail = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut detail);
+    }
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut detail);
+    }
+    let detail = detail.lines().find(|line| !line.trim().is_empty());
+    Err(detail.unwrap_or(refused).trim().into())
+}
+
+/// Claude has no in-process rollback. This asks the CLI whether a resume that
+/// ends just before the prompt being cut would be accepted, without sending a
+/// prompt, then restores the files when asked. Returns the binding that makes
+/// the next launch perform the cut.
+fn claude_rewind(
+    request: &Request,
+    later: usize,
+    restore_files: bool,
+) -> Result<Option<String>, RewindError> {
+    let binding = request
+        .provider_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("The conversation has no saved provider session to rewind")?;
+    // A pending rewind already ends the conversation at its entry.
+    let (session, pending) = claude_resume(binding);
+    let transcript = claude_transcript(&request.settings.account, session)
+        .ok_or("Could not find the Claude conversation to rewind")?;
+    let transcript = std::fs::read_to_string(transcript)
+        .map_err(|error| format!("Could not read the Claude conversation: {error}"))?;
+    let (at, prompt) = claude_boundary(&transcript, &request.prompt, later, pending)?;
+    // The warm process still holds the turns about to be dropped.
+    parked::discard_session(request);
+    let binding = at.map(|at| format!("{session}{CLAUDE_AT}{at}"));
+    if let Some(binding) = &binding {
+        let mut command = Command::new(&request.binary);
+        crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
+        command.envs(&request.settings.environment);
+        request.settings.account.apply(Kind::Claude, &mut command)?;
+        command.args([
+            "--verbose",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{\"mcpServers\":{}}",
+            "--settings",
+            "{\"disableAllHooks\":true}",
+        ]);
+        claude_resume_args(&mut command, binding);
+        command.current_dir(&request.cwd);
+        // With no input the CLI loads the truncated session, writes nothing and exits.
+        run_claude(command, "Claude refused the rewind; history was preserved")?;
+    }
+    // Files change only once the cut is known to go through, as in Claude Desktop.
+    if restore_files {
+        run_claude(
+            claude_rewind_files(request, session, &prompt)?,
+            "Claude refused to restore the files",
+        )
+        .map_err(|reason| {
+            let older = if reason.contains("not enabled") || reason.contains("No file checkpoint") {
+                " Only changes made after this update of MCode can be restored."
+            } else {
+                ""
+            };
+            format!("Couldn't restore the code from this point. {reason}{older}")
+        })?;
+    }
+    Ok(binding)
 }
 
 /// Cuts the provider's conversation just before the prompt `request.prompt`,
@@ -288,21 +355,24 @@ fn claude_rewind(request: &Request, later: usize) -> Result<Option<String>, Rewi
 /// persist with the confirmed local truncation, or None when no provider
 /// history survives. Claude, OpenCode and Pi cut a copy and leave the original
 /// session as it was; Codex reverts its thread in place before `turn_id`.
-/// Files on disk are never touched.
+/// Files on disk change only with `restore_files`, which Claude and OpenCode
+/// honour (see `restores_files`): Claude restores them before the cut, and
+/// OpenCode reverts its session in place instead of forking it.
 pub fn rewind_to(
     request: Request,
     turn_id: Option<&str>,
     later: usize,
     sent_at: Option<u64>,
+    restore_files: bool,
 ) -> Result<Option<String>, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support rewinding".into());
     }
     if request.kind == Kind::OpenCode {
-        return super::opencode::rewind(&request, sent_at);
+        return super::opencode::rewind(&request, sent_at, restore_files);
     }
     if request.kind == Kind::Claude {
-        return claude_rewind(&request, later);
+        return claude_rewind(&request, later, restore_files);
     }
     let session = request
         .provider_id
@@ -575,9 +645,14 @@ mod tests {
             "{\"type\":\"last-prompt\"}".into(),
         ]
         .join("\n");
-        let at = |expected, later, from| claude_boundary(&transcript, expected, later, from);
+        let at = |expected, later, from| {
+            claude_boundary(&transcript, expected, later, from).map(|(at, _)| at)
+        };
         assert_eq!(at("Third", 0, None).unwrap().as_deref(), Some("i2"));
         assert_eq!(at("Second prompt", 1, None).unwrap().as_deref(), Some("x1"));
+        // The prompt's own id is what file restores are keyed by.
+        let (_, prompt) = claude_boundary(&transcript, "Second prompt", 1, None).unwrap();
+        assert_eq!(prompt, "p2");
         // Nothing precedes the first prompt, so no history survives the cut.
         assert_eq!(at("First", 2, None).unwrap(), None);
         // A pending rewind at `x1` already ends the chain before `p2`.
@@ -586,6 +661,60 @@ mod tests {
         assert!(at("First", 1, None).is_err());
         assert!(at("First", 3, None).is_err());
         assert!(claude_boundary("", "First", 0, None).is_err());
+    }
+    #[test]
+    fn restoring_files_resumes_at_the_prompt_with_checkpoints_on() {
+        let request = Request {
+            kind: Kind::Claude,
+            binary: PathBuf::from("claude"),
+            cwd: PathBuf::from("/project"),
+            prompt: String::new(),
+            provider_id: None,
+            model: None,
+            settings: Default::default(),
+        };
+        let command = claude_rewind_files(&request, "session", "p2").unwrap();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--resume", "session", "--rewind-files", "p2"]);
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING" && value == Some("true".as_ref())
+        }));
+    }
+    #[test]
+    fn only_claude_and_opencode_offer_files_and_only_after_an_edit() {
+        use crate::session::{tool::ToolCall, transcript::Row};
+        let row = |role: &str, text: String| Row {
+            role: role.into(),
+            text,
+            first: true,
+            sent_at: None,
+        };
+        let mut edit = ToolCall::new("t1", "Edit");
+        edit.input = json!({"file_path":"src/a.rs"}).to_string();
+        let mut read = ToolCall::new("t2", "Read");
+        read.input = json!({"file_path":"src/b.rs"}).to_string();
+        let mut shell = ToolCall::new("t3", "Bash");
+        shell.input = json!({"command":"rm src/b.rs"}).to_string();
+        let patch = ToolCall::new("t4", "apply_patch");
+        let rows = [
+            row("user", "Fix it".into()),
+            row("tool", serde_json::to_string(&edit).unwrap()),
+            row("user", "Look again".into()),
+            row("tool", serde_json::to_string(&read).unwrap()),
+            row("tool", serde_json::to_string(&shell).unwrap()),
+            row("user", "Patch it".into()),
+            row("tool", serde_json::to_string(&patch).unwrap()),
+        ];
+        assert!(restores_files(Kind::Claude, &rows, 0));
+        assert!(restores_files(Kind::OpenCode, &rows, 5));
+        // A read and a shell command follow the second message, and only up to
+        // the third: nothing a provider can restore.
+        assert!(!restores_files(Kind::Claude, &rows[..5], 2));
+        assert!(!restores_files(Kind::Pi, &rows, 0));
+        assert!(!restores_files(Kind::Codex, &rows, 0));
     }
     #[test]
     fn claude_binding_carries_a_pending_rewind_until_the_fork_replaces_it() {

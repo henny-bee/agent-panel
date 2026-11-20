@@ -703,12 +703,15 @@ fn catalog_row(id: &str, row: &Value, provider: Option<&str>, agents: &[Value]) 
         .unwrap_or_else(|| name.into());
     json!({"modelId":id,"name":name,"configOptions":config})
 }
-/// Copies the session up to the prompt sent at `sent_at` into a new OpenCode
-/// session and returns its id. OpenCode's revert would also restore files, so
-/// the cut is a fork, which leaves the source session and the disk alone.
+/// Cuts the session before the prompt sent at `sent_at`. Without
+/// `restore_files` it copies the history before it into a new session and
+/// returns that id, leaving the source session and the disk alone. With it,
+/// OpenCode's revert cuts the session in place and restores the files its
+/// agent changed since.
 pub(super) fn rewind(
     request: &Request,
     sent_at: Option<u64>,
+    restore_files: bool,
 ) -> Result<Option<String>, rewind::RewindError> {
     let cancel = AtomicBool::new(false);
     let session = request
@@ -725,7 +728,16 @@ pub(super) fn rewind(
         None,
     )?;
     let before = first_prompt_since(&messages, sent_at);
-    Ok(Some(client.fork(session, before.as_deref())?))
+    if !restore_files {
+        return Ok(Some(client.fork(session, before.as_deref())?));
+    }
+    // OpenCode holds nothing from that prompt on, so there is nothing to undo.
+    if let Some(message) = before {
+        // A reverted history must never be resumed by an old warm generation.
+        forget_session(session, &request.settings.account.id, &request.cwd);
+        client.revert(session, &message)?;
+    }
+    Ok(Some(session.into()))
 }
 
 /// The first OpenCode user message created at or after `sent_at`. The local
@@ -761,5 +773,15 @@ mod tests {
         // A prompt that never reached OpenCode cuts before the next one, or nothing.
         assert_eq!(first_prompt_since(&messages, 200).as_deref(), Some("m2"));
         assert_eq!(first_prompt_since(&messages, 400), None);
+    }
+    #[test]
+    fn only_a_refused_unstaged_revert_is_known_to_change_nothing() {
+        let error = |message: &str, staged| {
+            client::revert_error(message.into(), staged).provider_may_have_changed
+        };
+        assert!(!error("OpenCode HTTP 409: busy", false));
+        assert!(error("OpenCode HTTP 409: busy", true));
+        assert!(error("OpenCode HTTP 500: snapshot failed", false));
+        assert!(error("OpenCode HTTP request failed: timed out", false));
     }
 }

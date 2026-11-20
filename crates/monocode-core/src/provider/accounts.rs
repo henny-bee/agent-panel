@@ -114,6 +114,11 @@ impl Profile {
         if kind == Kind::Claude && std::env::var_os("CLAUDE_CODE_ENABLE_TODO_TOOLS").is_none() {
             command.env("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1");
         }
+        // Rewind can only restore files from checkpoints, which the CLI keeps
+        // outside its own terminal UI only when asked.
+        if kind == Kind::Claude {
+            command.env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
+        }
         let Some(dir) = self.directory(kind)? else {
             return Ok(());
         };
