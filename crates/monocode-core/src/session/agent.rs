@@ -133,6 +133,8 @@ pub struct Settings {
     pub orchestrator: bool,
     /// The session is shown as the provider's own CLI rather than as a chat.
     pub terminal: bool,
+    /// The session stays a chat even when new Claude sessions open in the CLI.
+    pub chat: bool,
     pub new_worktree: bool,
     pub worktree_base: Option<String>,
     pub worktree_cwd: Option<String>,

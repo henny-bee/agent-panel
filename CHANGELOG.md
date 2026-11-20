@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Hover any message you sent to **Fork**, **Rewind** or **Edit** from that point, as in Claude Desktop. Fork opens a new chat with the conversation up to that message and the message waiting in the box; the original chat stays as it is. Rewind removes the message and everything after it and puts the message back in the box. Edit puts it in the box, and sending it restarts the chat from there. This works in Claude, Codex, OpenCode, Pi and Omp chats; Codex chats can't be forked yet.
 - In Claude and OpenCode chats where the agent changed files, Rewind and Edit ask whether to restore the code too (**Code and conversation**) or only cut the chat (**Conversation only**). Changes made through shell commands and commits stay. Claude can restore only changes made after this update.
+- The New tab menu (the arrow next to **+**) has **New Claude Session (Terminal)** and **New Claude Session (Chat)**, to open one Claude session in the Claude Code CLI or in the chat without changing Settings.
 
 ### Fixed
 

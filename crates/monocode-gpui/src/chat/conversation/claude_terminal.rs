@@ -14,14 +14,16 @@ pub(super) struct State {
 }
 
 impl Conversation {
-    /// New Claude sessions run in the CLI; one that started there stays there.
-    /// Sessions with a chat history here, Monos and remote hosts keep the chat.
-    fn claude_terminal_wanted(&self, cx: &App) -> bool {
+    /// New Claude sessions run in the CLI unless started as a chat; one that
+    /// started there stays there. Sessions with a chat history here, Monos and
+    /// remote hosts keep the chat.
+    pub(super) fn claude_terminal_wanted(&self, cx: &App) -> bool {
         Kind::from_id(&self.summary.provider) == Kind::Claude
             && self.settings.mono.is_none()
             && !self.is_remote()
             && (self.settings.terminal
-                || !self.summary.has_messages
+                || !self.settings.chat
+                    && !self.summary.has_messages
                     && cx
                         .try_global::<crate::ui::preferences::Preferences>()
                         .is_some_and(|preferences| preferences.claude_terminal))

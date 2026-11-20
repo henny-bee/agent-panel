@@ -757,3 +757,23 @@ fn pressing_outside_dismisses_and_the_trigger_toggles(cx: &mut TestAppContext) {
         .unwrap();
     assert!(input_focused(window, cx));
 }
+
+#[gpui::test]
+fn claude_sessions_started_as_the_cli_or_the_chat_ignore_the_switch(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |c, _, cx| {
+            let switch = |on| crate::ui::preferences::Preferences {
+                claude_terminal: on,
+                ..Default::default()
+            };
+            cx.set_global(switch(false));
+            c.settings.terminal = true;
+            assert!(c.claude_terminal_wanted(cx));
+            c.settings.terminal = false;
+            cx.set_global(switch(true));
+            c.settings.chat = true;
+            assert!(!c.claude_terminal_wanted(cx));
+        })
+        .unwrap();
+}

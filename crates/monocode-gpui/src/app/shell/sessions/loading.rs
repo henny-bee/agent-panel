@@ -119,6 +119,7 @@ pub(crate) struct NewSessionDefaults {
     account: monocode_core::session::profile::Profile,
     access: monocode_core::session::agent::AccessMode,
     effort: Option<String>,
+    terminal: Option<bool>,
 }
 
 impl NewSessionDefaults {
@@ -127,10 +128,15 @@ impl NewSessionDefaults {
         cwd: &str,
         cx: &App,
     ) -> Self {
-        let super::super::glue::new_chat_choice::NewChatChoice { kind, model } = choice;
+        let super::super::glue::new_chat_choice::NewChatChoice {
+            kind,
+            model,
+            terminal,
+        } = choice;
         Self {
             kind,
             model,
+            terminal,
             account: crate::accounts::get(cx)
                 .map(|center| center.read(cx).selected(kind, cwd))
                 .unwrap_or_default(),
@@ -152,6 +158,7 @@ impl NewSessionDefaults {
             account,
             access,
             effort,
+            terminal,
         } = self;
         let summary = store.create(kind.id(), cwd)?;
         let mut settings = new_session_settings(
@@ -172,10 +179,15 @@ impl NewSessionDefaults {
         }
         settings.account = account;
         settings.worktree_cwd = worktree_cwd;
+        if let Some(terminal) = terminal {
+            settings.terminal = terminal;
+            settings.chat = !terminal;
+        }
         if settings.model.is_some()
             || settings.effort.is_some()
             || !settings.model_settings.is_empty()
             || settings.worktree_cwd.is_some()
+            || terminal.is_some()
             || settings.account.id != monocode_core::session::profile::DEFAULT
             || access != Default::default()
         {
