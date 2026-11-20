@@ -262,6 +262,75 @@ fn follows_background_work_until_it_ends_and_the_context_it_fills() {
 }
 
 #[test]
+fn drops_subagent_work_that_died_with_its_agent_or_was_stopped() {
+    let call = |id: &str, name: &str, input: &str, second: &str| {
+        format!(
+            r#"{{"type":"assistant","message":{{"id":"m{id}","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{input}}}]}},"timestamp":"2026-11-20T10:00:{second}.000Z"}}"#
+        )
+    };
+    let result = |id: &str, result: &str| {
+        format!(
+            r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}"}}]}},"toolUseResult":{result}}}"#
+        )
+    };
+    let mut agent = Log::agent();
+    let mut tracker = Tracker::default();
+    feed(
+        &mut agent,
+        &[
+            &call(
+                "b1",
+                "Bash",
+                r#"{"command":"cargo test","run_in_background":true}"#,
+                "01",
+            ),
+            &result("b1", r#"{"backgroundTaskId":"bg1"}"#),
+        ],
+    );
+    // Killed with its agent: only the agent's own notice says so.
+    feed(
+        &mut tracker.main,
+        &[
+            r#"{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>killed</status>\n</task-notification>","timestamp":"2026-11-20T10:00:02.000Z"}"#,
+        ],
+    );
+    // Continued, then a monitor stopped by the id its result names.
+    feed(
+        &mut agent,
+        &[
+            &call(
+                "m2",
+                "Monitor",
+                r#"{"command":"tail -f log","timeout_ms":1800000}"#,
+                "03",
+            ),
+            &result(
+                "m2",
+                r#"{"taskId":"mon2","timeoutMs":1800000,"persistent":false}"#,
+            ),
+            &call("s2", "TaskStop", r#"{"task_id":"mon2"}"#, "04"),
+            &call(
+                "b3",
+                "Bash",
+                r#"{"command":"npm test","run_in_background":true}"#,
+                "05",
+            ),
+        ],
+    );
+    tracker.agents.insert(
+        "a1".to_owned(),
+        AgentLog {
+            log: agent,
+            meta: Value::Null,
+        },
+    );
+    let now = millis("2026-11-20T10:00:30.000Z").unwrap();
+    let snapshot = tracker.snapshot(&Profile::default(), now, false);
+    let shown: Vec<_> = snapshot.background.iter().map(|b| &b.detail).collect();
+    assert_eq!(shown, ["npm test"]);
+}
+
+#[test]
 fn a_big_transcript_leaves_only_its_unfinished_line_in_memory() {
     let dir = std::env::temp_dir().join(format!("claude-activity-big-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -86,6 +86,8 @@ pub(super) struct Log {
     pub(super) steps: Vec<String>,
     /// The latest task notification per agent id: status and when.
     pub(super) notices: HashMap<String, (AgentStatus, i64)>,
+    /// When each task last failed or was stopped.
+    pub(super) killed: HashMap<String, i64>,
     /// The context the last reply was sent with, and the most it reached.
     pub(super) used: u64,
     pub(super) peak: u64,
@@ -163,13 +165,14 @@ impl Log {
             }
             self.last = self.last.max(time);
         }
-        const WANTED: [&str; 8] = [
+        const WANTED: [&str; 9] = [
             "\"type\":\"assistant\"",
             "\"type\":\"instructions\"",
             "<task-notification>",
             "<command-message>",
             "\"type\":\"create\"",
             "\"backgroundTaskId\"",
+            "\"taskId\"",
             "\"async_launched\"",
             "\"compact_boundary\"",
         ];
@@ -334,9 +337,11 @@ impl Log {
             if result["type"] == "create" {
                 self.created.insert(id.to_owned());
             }
+            // A monitor names its task `taskId`.
             let task = result["backgroundTaskId"]
                 .as_str()
-                .or(result["agentId"].as_str());
+                .or(result["agentId"].as_str())
+                .or(result["taskId"].as_str());
             if let Some(task) = task {
                 if let Some(call) = self.background.iter_mut().find(|t| t.tool_id == id) {
                     call.task_id = task.to_owned();
@@ -387,6 +392,9 @@ impl Log {
                 "failed" => AgentStatus::Failed,
                 _ => AgentStatus::Stopped,
             };
+            if status != AgentStatus::Done {
+                self.killed.insert(task.to_owned(), time);
+            }
             self.notices.insert(task.to_owned(), (status, time));
         }
     }
