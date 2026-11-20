@@ -11,8 +11,9 @@ use std::path::PathBuf;
 pub(super) struct State {
     active: bool,
     prepared: Option<EditSnapshot>,
-    /// A confirmed provider mutation followed by a storage conflict requires a
-    /// history reload, rather than silently appending to inconsistent context.
+    /// A provider change the local history may not match holds edits and
+    /// sends until Cancel edit lifts it, rather than silently appending to
+    /// inconsistent context.
     blocked: bool,
     /// The user confirmed the rewind that sending the prepared edit performs,
     /// and whether it restores files too.
@@ -25,10 +26,15 @@ impl State {
 }
 
 impl Conversation {
-    /// Drops a recalled edit, or lifts a recovery guard: cancelling is the way
-    /// back into a guarded chat, taking the provider's context as it is.
-    pub(super) fn cancel_edit_last_turn(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.editing_last_turn.active {
+    /// Drops a recalled edit. With `lift_guard`, which only the Cancel edit
+    /// button passes, it also lifts a recovery guard: that is the way back into
+    /// a guarded chat, taking the provider's context as it is.
+    pub(super) fn cancel_edit_last_turn(
+        &mut self,
+        lift_guard: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.editing_last_turn.active || (self.editing_last_turn.blocked && !lift_guard) {
             return false;
         }
         if self.editing_last_turn.blocked {
@@ -116,6 +122,26 @@ impl Conversation {
                     && !self.input.read(cx).is_composing()
                     && self.attachments.is_empty()))
     }
+    /// Whether a cut can't start now. Says why, as the click does nothing else.
+    fn refuse_cut(&mut self, cut: Cut, cx: &mut Context<Self>) -> bool {
+        if self.can_prepare_edit(cut, cx) {
+            return false;
+        }
+        self.status = if cut != Cut::Fork
+            && (!self.input.read(cx).content.is_empty() || !self.attachments.is_empty())
+        {
+            "Send or clear what's in the message box first."
+        } else if !self.follow_ups.state.messages.is_empty()
+            || self.follow_ups.state.draft.is_some()
+        {
+            "Send or clear the queued messages and drafts first."
+        } else {
+            "Wait for the current work in this chat to finish first."
+        }
+        .into();
+        cx.notify();
+        true
+    }
     /// Asks before a cut. When the cut can restore files (`files`), the user
     /// picks "Code and conversation" or "Conversation only" instead of
     /// `action`. `then` gets whether to restore files, unless cancelled.
@@ -173,7 +199,7 @@ impl Conversation {
         }
         // The action is tied to a painted source row. A history restoration may
         // replace that row, so never replay this intent against an empty cache.
-        if self.recovery_blocked(cx) || !self.can_prepare_edit(cut, cx) {
+        if self.recovery_blocked(cx) || self.refuse_cut(cut, cx) {
             return;
         }
         let rows = self.transcript.read(cx).source_rows();
@@ -214,7 +240,7 @@ impl Conversation {
     }
     /// `files` restores files too; only Rewind passes it here.
     fn prepare_cut(&mut self, turn: usize, cut: Cut, files: bool, cx: &mut Context<Self>) {
-        if !self.can_prepare_edit(cut, cx) {
+        if self.refuse_cut(cut, cx) {
             return;
         }
         let rows = self.transcript.read(cx).source_rows().to_vec();
@@ -672,7 +698,7 @@ mod tests {
             assert!(chat.submit_edited(cx));
             assert!(chat.editing_last_turn.pending());
             assert_eq!(chat.input.read(cx).content, "/compact");
-            assert!(chat.cancel_edit_last_turn(cx));
+            assert!(chat.cancel_edit_last_turn(true, cx));
             assert!(!chat.editing_last_turn.pending());
             assert_eq!(chat.input.read(cx).content, "/compact");
             assert_eq!(
@@ -713,9 +739,12 @@ mod tests {
             });
             assert!(chat.submit_edited(cx));
             assert!(chat.editing_last_turn.blocked);
+            // Escape leaves the guard in place.
+            chat.stop_if_busy(cx);
+            assert!(chat.editing_last_turn.blocked);
             assert_eq!(chat.input.read(cx).content, "Unsent edited prompt");
             // Cancel edit is the way out: it lifts the guard and keeps the draft.
-            assert!(chat.cancel_edit_last_turn(cx));
+            assert!(chat.cancel_edit_last_turn(true, cx));
             assert!(!chat.editing_last_turn.pending());
             assert_eq!(chat.input.read(cx).content, "Unsent edited prompt");
             let store = locked(&chat.store).unwrap();

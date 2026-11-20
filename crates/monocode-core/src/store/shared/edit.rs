@@ -31,7 +31,7 @@ impl Store {
                 .any(|block| block["draft"] == true)
         {
             return Err(
-                "Clear queued messages and saved drafts before editing the last message".into(),
+                "Clear queued messages and saved drafts before forking, rewinding or editing a message".into(),
             );
         }
         Ok(())

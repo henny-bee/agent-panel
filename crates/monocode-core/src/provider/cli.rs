@@ -34,9 +34,13 @@ pub fn output(
 ) -> Result<String, String> {
     let mut command = Command::new(binary);
     crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
+    command.args(args).current_dir(cwd);
+    run(command, timeout)
+}
+/// Runs `command` with no input, draining its output as it goes so a full
+/// pipe can't stall it. Returns stdout, or stderr then stdout on failure.
+pub fn run(mut command: Command, timeout: Duration) -> Result<String, String> {
     command
-        .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

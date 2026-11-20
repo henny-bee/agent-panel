@@ -56,6 +56,36 @@ impl Client {
         body: Option<Value>,
         timeout: Duration,
     ) -> Result<Value, String> {
+        let mut value = self.raw(method, path, body, timeout)?;
+        if value.get("data").is_some() {
+            value = value["data"].take();
+        }
+        Ok(value)
+    }
+    /// Every message in `session`, oldest first. v2 pages the list, newest 50
+    /// first unless asked otherwise; v1 returns it whole.
+    pub fn messages(&self, session: &str) -> Result<Value, String> {
+        let path = self.path(&format!("/session/{}/message", encode(session)));
+        if !self.v2 {
+            return self.request("GET", &path, None);
+        }
+        all_pages(|query| {
+            self.raw(
+                "GET",
+                &format!("{path}?{query}"),
+                None,
+                Duration::from_secs(30),
+            )
+        })
+    }
+    /// The whole reply, with v2's `data` envelope and paging `cursor`.
+    fn raw(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let wire = self.wire(method, path).timeout(timeout);
         let response = if let Some(body) = body {
             wire.set("Content-Type", "application/json")
@@ -75,12 +105,7 @@ impl Client {
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
-        let mut value: Value = serde_json::from_str(&text)
-            .map_err(|e| format!("OpenCode returned invalid JSON: {e}"))?;
-        if value.get("data").is_some() {
-            value = value["data"].take();
-        }
-        Ok(value)
+        serde_json::from_str(&text).map_err(|e| format!("OpenCode returned invalid JSON: {e}"))
     }
     pub fn events(
         &self,
@@ -372,11 +397,7 @@ impl Client {
         Ok(())
     }
     pub fn repair_unsupported_file_turn(&self, session: &str) -> Result<(), String> {
-        let messages = self.request(
-            "GET",
-            &self.path(&format!("/session/{}/message", encode(session))),
-            None,
-        )?;
+        let messages = self.messages(session)?;
         let rows: Vec<_> = messages.as_array().into_iter().flatten().collect();
         let media = regex::Regex::new(r#"(?i)file part media type\s+([^\s'\"`]+)"#).unwrap();
         let mut failures = Vec::new();
@@ -579,6 +600,25 @@ impl Client {
             )
         };
         self.request("POST", &path, Some(body)).map(|_| ())
+    }
+}
+/// Joins the pages `page` returns for each query, oldest first. A cursor
+/// can't be combined with an order, and comes back even after the last page.
+pub(super) fn all_pages(
+    mut page: impl FnMut(&str) -> Result<Value, String>,
+) -> Result<Value, String> {
+    const LIMIT: usize = 200;
+    let mut all = Vec::new();
+    let mut query = format!("limit={LIMIT}&order=asc");
+    loop {
+        let reply = page(&query)?;
+        let rows = reply["data"].as_array().cloned().unwrap_or_default();
+        let full = rows.len() == LIMIT;
+        all.extend(rows);
+        match reply["cursor"]["next"].as_str() {
+            Some(next) if full => query = format!("limit={LIMIT}&cursor={}", encode(next)),
+            _ => return Ok(Value::Array(all)),
+        }
     }
 }
 /// A definite HTTP 4xx refusal before anything was staged changed nothing.

@@ -412,7 +412,7 @@ impl Conversation {
                                 .text_color(content(0.6))
                                 .child("Cancel edit")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.cancel_edit_last_turn(cx);
+                                    this.cancel_edit_last_turn(true, cx);
                                 })),
                         )
                     })

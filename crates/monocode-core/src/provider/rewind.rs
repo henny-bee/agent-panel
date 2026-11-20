@@ -232,7 +232,16 @@ fn claude_boundary(
         }
         return Ok((parent.clone(), id));
     }
-    Err("Claude did not save this message; history was preserved".into())
+    // A compaction starts a new chain (`parentUuid: null`) without what came
+    // before it.
+    // ponytail: any compaction in the file explains a missed prompt; check the
+    // entry the walk ended on if that ever misleads.
+    Err(if transcript.contains("\"compact_boundary\"") {
+        "Claude compacted this chat after this message, so it can't go back past that point"
+    } else {
+        "Claude did not save this message; history was preserved"
+    }
+    .into())
 }
 
 /// `claude --resume <session> --rewind-files <prompt>` puts files back as they
@@ -249,40 +258,15 @@ fn claude_rewind_files(request: &Request, session: &str, prompt: &str) -> Result
     Ok(command)
 }
 
-/// Runs a Claude command that reads no input and writes little. Returns the
-/// first line it wrote when it fails, stderr first, or `refused` when none.
-fn run_claude(mut command: Command, refused: &str) -> Result<(), String> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    process::isolate(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Could not start Claude: {error}"))?;
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < Duration::from_secs(60) => thread::sleep(TICK),
-            _ => {
-                process::terminate(&mut child);
-                return Err("Claude did not answer within a minute".into());
-            }
-        }
-    };
-    if status.success() {
-        return Ok(());
-    }
-    let mut detail = String::new();
-    if let Some(mut stderr) = child.stderr.take() {
-        let _ = stderr.read_to_string(&mut detail);
-    }
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut detail);
-    }
-    let detail = detail.lines().find(|line| !line.trim().is_empty());
-    Err(detail.unwrap_or(refused).trim().into())
+/// Runs a Claude command that reads no input. Returns the first line it wrote
+/// when it fails, stderr first, or `refused` when none.
+fn run_claude(command: Command, refused: &str) -> Result<(), String> {
+    super::cli::run(command, Duration::from_secs(60))
+        .map(drop)
+        .map_err(|detail| {
+            let line = detail.lines().map(str::trim).find(|line| !line.is_empty());
+            line.unwrap_or(refused).to_owned()
+        })
 }
 
 /// Claude has no in-process rollback. This asks the CLI whether a resume that
@@ -350,14 +334,14 @@ fn claude_rewind(
 }
 
 /// Cuts the provider's conversation just before the prompt `request.prompt`,
-/// which has `later` user messages after it. Runs on a worker, after the caller
+/// which has `later` prompts after it. Runs on a worker, after the caller
 /// has reserved its conversation, and sends no prompt. Returns the binding to
 /// persist with the confirmed local truncation, or None when no provider
 /// history survives. Claude, OpenCode and Pi cut a copy and leave the original
 /// session as it was; Codex reverts its thread in place before `turn_id`.
 /// Files on disk change only with `restore_files`, which Claude and OpenCode
-/// honour (see `restores_files`): Claude restores them before the cut, and
-/// OpenCode reverts its session in place instead of forking it.
+/// honour (see `restores_files`): Claude restores them once its cut checks
+/// out, and OpenCode reverts its session in place instead of forking it.
 pub fn rewind_to(
     request: Request,
     turn_id: Option<&str>,
@@ -367,6 +351,14 @@ pub fn rewind_to(
 ) -> Result<Option<String>, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support rewinding".into());
+    }
+    // An attachment-only message would match any prompt.
+    if (request.kind == Kind::Claude || request.kind.is_pi()) && request.prompt.trim().is_empty() {
+        return Err(format!(
+            "{} finds a message by its text, and this one has none; history was preserved",
+            request.kind.label()
+        )
+        .into());
     }
     if request.kind == Kind::OpenCode {
         return super::opencode::rewind(&request, sent_at, restore_files);
@@ -465,7 +457,12 @@ fn fork_entry(data: &Value, expected: &str, later: usize) -> Result<String, Stri
         .nth(later)
         .ok_or("Pi did not save this message; history was preserved")?;
     let text = entry["text"].as_str().unwrap_or("");
-    if !text.is_empty() && !squash(text).contains(&squash(expected)) {
+    if text.trim().is_empty() {
+        return Err(
+            "Pi saved no text for this message to check it by; history was preserved".into(),
+        );
+    }
+    if !squash(text).contains(&squash(expected)) {
         return Err(
             "Pi's saved conversation does not match this message; history was preserved".into(),
         );
@@ -661,6 +658,36 @@ mod tests {
         assert!(at("First", 1, None).is_err());
         assert!(at("First", 3, None).is_err());
         assert!(claude_boundary("", "First", 0, None).is_err());
+        // A compaction's new chain holds nothing from before it.
+        let compacted = [
+            claude_line("p1", None, "user", json!("First")),
+            json!({"uuid":"c1","parentUuid":null,"type":"system","subtype":"compact_boundary"})
+                .to_string(),
+            claude_line("p2", Some("c1"), "user", json!("Second")),
+        ]
+        .join("\n");
+        let error = claude_boundary(&compacted, "First", 1, None).unwrap_err();
+        assert!(error.starts_with("Claude compacted this chat"));
+    }
+    #[test]
+    fn a_message_without_text_is_never_matched_by_text() {
+        for kind in [Kind::Claude, Kind::Pi] {
+            let request = Request {
+                kind,
+                binary: PathBuf::from("unused"),
+                cwd: PathBuf::from("/project"),
+                prompt: " ".into(),
+                provider_id: Some("session".into()),
+                model: None,
+                settings: Default::default(),
+            };
+            let error = rewind_to(request, None, 0, None, false).unwrap_err();
+            assert!(error.message.contains("this one has none"));
+        }
+        let messages = json!({"messages":[{"entryId":"e1","text":""}]});
+        assert!(fork_entry(&messages, "First", 0)
+            .unwrap_err()
+            .contains("no text"));
     }
     #[test]
     fn restoring_files_resumes_at_the_prompt_with_checkpoints_on() {

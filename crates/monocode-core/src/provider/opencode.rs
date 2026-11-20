@@ -722,22 +722,31 @@ pub(super) fn rewind(
     let sent_at = sent_at.ok_or("This message has no send time to find it in OpenCode")?;
     let v2 = generation(request, &cancel)?;
     let (client, _server) = connect(request, &cancel, v2)?;
-    let messages = client.request(
-        "GET",
-        &client.path(&format!("/session/{}/message", client::encode(session))),
-        None,
-    )?;
+    cut(&client, session, sent_at, restore_files, || {
+        forget_session(session, &request.settings.account.id, &request.cwd)
+    })
+}
+/// `rewind` once connected. `forget` drops the warm generation before an
+/// in-place revert, which it must never resume.
+fn cut(
+    client: &Client,
+    session: &str,
+    sent_at: u64,
+    restore_files: bool,
+    forget: impl FnOnce(),
+) -> Result<Option<String>, rewind::RewindError> {
+    let messages = client.messages(session)?;
     let before = first_prompt_since(&messages, sent_at);
-    if !restore_files {
-        return Ok(Some(client.fork(session, before.as_deref())?));
+    match before.as_deref().filter(|_| restore_files) {
+        Some(message) => {
+            forget();
+            client.revert(session, message)?;
+            Ok(Some(session.into()))
+        }
+        // With nothing from that prompt on, a revert would change nothing yet
+        // read as a cut in place, so this copies as "Conversation only" does.
+        None => Ok(Some(client.fork(session, before.as_deref())?)),
     }
-    // OpenCode holds nothing from that prompt on, so there is nothing to undo.
-    if let Some(message) = before {
-        // A reverted history must never be resumed by an old warm generation.
-        forget_session(session, &request.settings.account.id, &request.cwd);
-        client.revert(session, &message)?;
-    }
-    Ok(Some(session.into()))
 }
 
 /// The first OpenCode user message created at or after `sent_at`. The local
@@ -773,6 +782,86 @@ mod tests {
         // A prompt that never reached OpenCode cuts before the next one, or nothing.
         assert_eq!(first_prompt_since(&messages, 200).as_deref(), Some("m2"));
         assert_eq!(first_prompt_since(&messages, 400), None);
+    }
+    #[test]
+    fn v2_messages_are_read_page_by_page_from_the_oldest() {
+        let page = |from: usize, count: usize| {
+            let data: Vec<_> = (from..from + count).map(|n| json!({"id":n})).collect();
+            json!({"data":data,"cursor":{"next":format!("after {}", from + count)}})
+        };
+        let mut queries = Vec::new();
+        let all = client::all_pages(|query| {
+            queries.push(query.to_owned());
+            Ok(if queries.len() == 1 {
+                page(0, 200)
+            } else {
+                page(200, 3)
+            })
+        })
+        .unwrap();
+        assert_eq!(all.as_array().unwrap().len(), 203);
+        assert_eq!(all[200]["id"], 200);
+        assert_eq!(
+            queries,
+            ["limit=200&order=asc", "limit=200&cursor=after%20200"]
+        );
+    }
+    /// Answers each request with the next reply and reports its request line.
+    fn serve(replies: Vec<Value>) -> (String, mpsc::Receiver<String>) {
+        use std::io::{BufRead, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            for reply in replies {
+                let mut reader = BufReader::new(listener.accept().unwrap().0);
+                let (mut head, mut length) = (Vec::new(), 0);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if let Some(value) = line
+                        .split_once(':')
+                        .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                    {
+                        length = value.1.trim().parse().unwrap();
+                    }
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    head.push(line.trim().to_owned());
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                let body = reply.to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                reader.get_mut().write_all(reply.as_bytes()).unwrap();
+                let _ = send.send(head.swap_remove(0));
+            }
+        });
+        (url, receive)
+    }
+    #[test]
+    fn restoring_with_nothing_since_the_message_copies_instead_of_cutting_in_place() {
+        let (url, requests) = serve(vec![
+            json!({"data":[{"info":{"id":"m1","role":"user","time":{"created":100}}}],"cursor":{"next":"c"}}),
+            json!({"data":{"id":"copy"}}),
+        ]);
+        let client = Client::new(url, String::new(), true, None);
+        let mut forgot = false;
+        let binding = cut(&client, "s", 200, true, || forgot = true).unwrap();
+        // A new id never reads as a cut in place, so no recovery guard is set.
+        assert_eq!(binding.as_deref(), Some("copy"));
+        assert!(!forgot);
+        assert_eq!(
+            requests.recv().unwrap(),
+            "GET /api/session/s/message?limit=200&order=asc HTTP/1.1"
+        );
+        assert_eq!(
+            requests.recv().unwrap(),
+            "POST /api/session/s/fork HTTP/1.1"
+        );
     }
     #[test]
     fn only_a_refused_unstaged_revert_is_known_to_change_nothing() {

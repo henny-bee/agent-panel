@@ -896,9 +896,10 @@ impl Conversation {
         cx.emit(transfer);
     }
 
-    /// `Session: Stop` on Escape: cancels a running turn.
+    /// `Session: Stop` on Escape: drops a recalled edit or cancels a running
+    /// turn. A recovery guard stays until Cancel edit lifts it.
     pub(crate) fn stop_if_busy(&mut self, cx: &mut Context<Self>) {
-        if self.cancel_edit_last_turn(cx) {
+        if self.cancel_edit_last_turn(false, cx) {
             return;
         }
         if self.busy {

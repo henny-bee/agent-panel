@@ -26,18 +26,19 @@ impl EditSnapshot {
     pub fn matches(&self, rows: &[Row]) -> bool {
         self.rows == rows
     }
-    /// User messages after the cut, which the provider's copy must lose too.
+    /// Prompts after the cut, which the provider's copy must lose too. The
+    /// app's own prompts (coordinator reports) reach the provider as well.
     pub fn later(&self) -> usize {
         self.rows[self.start + 1..]
             .iter()
-            .filter(|row| row.first && row.role == "user")
+            .filter(|row| row.first && row.is_prompt())
             .count()
     }
-    /// Whether no user message precedes the cut, so no provider history survives it.
+    /// Whether no prompt precedes the cut, so no provider history survives it.
     pub fn first(&self) -> bool {
         !self.rows[..self.start]
             .iter()
-            .any(|row| row.first && row.role == "user")
+            .any(|row| row.first && row.is_prompt())
     }
     /// When the message the cut lands on was sent, if the history recorded it.
     pub fn sent_at(&self) -> Option<u64> {
@@ -172,7 +173,7 @@ impl Store {
                 .ok_or("Codex did not expose an exact user turn to edit")?;
             codex_turn_start(&rows, &settings, turn)
                 .or_else(|| {
-                    (!rows[..at].iter().any(|row| row.role == "user" && row.first)).then_some(at)
+                    (!rows[..at].iter().any(|row| row.is_prompt() && row.first)).then_some(at)
                 })
                 .ok_or("Codex user-turn boundaries are unavailable; history was preserved")?
         } else {
@@ -208,7 +209,7 @@ impl Store {
         let queue = self.follow_ups(id)?;
         if !queue.messages.is_empty() || queue.draft.is_some() {
             return Err(
-                "Clear queued messages and saved drafts before editing the last message".into(),
+                "Clear queued messages and saved drafts before forking, rewinding or editing a message".into(),
             );
         }
         Ok(())
@@ -315,17 +316,25 @@ impl Store {
         let mut settings = self.agent_settings(id)?.unwrap_or_default();
         settings.turns.retain(|&row, _| row < edit.start);
         let mut fork = self.create(&source.provider, &source.cwd)?;
-        self.title(fork.id, &title)?;
-        if let Some(blocks) = &edit.blocks {
-            // Rich turn receipts travel with the copied blocks.
-            self.shared_store_blocks(fork.id, &blocks[..edit.block_start])?;
-            self.shared_save_agent_preferences(fork.id, &settings)?;
-        } else {
-            self.write_rows(fork.id, 0, &edit.rows[..edit.start])?;
-            self.save_agent_settings(fork.id, &settings)?;
-        }
-        if let Some(binding) = provider_id {
-            self.provider_id(fork.id, binding)?;
+        let filled = (|| {
+            self.title(fork.id, &title)?;
+            if let Some(blocks) = &edit.blocks {
+                // Rich turn receipts travel with the copied blocks.
+                self.shared_store_blocks(fork.id, &blocks[..edit.block_start])?;
+                self.shared_save_agent_preferences(fork.id, &settings)?;
+            } else {
+                self.write_rows(fork.id, 0, &edit.rows[..edit.start])?;
+                self.save_agent_settings(fork.id, &settings)?;
+            }
+            match provider_id {
+                Some(binding) => self.provider_id(fork.id, binding),
+                None => Ok(()),
+            }
+        })();
+        if let Err(error) = filled {
+            // A half-copied chat must not stay behind.
+            let _ = self.delete(fork.id);
+            return Err(error);
         }
         fork.title = title;
         fork.provider_id = provider_id.map(str::to_owned);
@@ -401,6 +410,27 @@ mod tests {
         store.finish_edit(id, &edit, None).unwrap();
         assert!(store.load(id).unwrap().rows.is_empty());
         assert_eq!(store.sessions().unwrap()[0].provider_id, None);
+    }
+    #[test]
+    fn coordinator_reports_count_as_prompts_on_both_sides_of_a_cut() {
+        let mut store = Store::open(Path::new(":memory:")).unwrap();
+        let session = store.create("claude", "/project").unwrap();
+        store.provider_id(session.id, "session").unwrap();
+        let mut transcript = Transcript::default();
+        for (role, text) in [
+            ("mono-system", "Workers finished"),
+            ("assistant", "Summary"),
+            ("user", "Edit me"),
+            ("assistant", "Answer"),
+            ("mono-system", "Review finished"),
+            ("assistant", "Verdict"),
+        ] {
+            transcript.begin(role);
+            transcript.append(text);
+        }
+        store.write_rows(session.id, 0, &transcript.rows).unwrap();
+        let edit = store.prepare_edit(session.id, &transcript.rows, 2).unwrap();
+        assert_eq!((edit.later(), edit.first()), (1, false));
     }
     #[test]
     fn a_fork_copies_the_history_before_the_message_and_leaves_the_source() {
