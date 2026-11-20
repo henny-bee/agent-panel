@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, MCode gives memory back when it sits idle or in the background. It used to keep every letter, icon and image it had drawn.
+
 ## [mcode-v0.1.0] - 2026-11-20
 
 MCode's first release. The app's internal version stays 0.16.0, the Monocode

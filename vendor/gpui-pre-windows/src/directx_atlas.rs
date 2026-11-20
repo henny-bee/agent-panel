@@ -86,6 +86,17 @@ impl PlatformAtlas for DirectXAtlas {
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
+
+    /// Without this the trim that runs once the app goes quiet would keep
+    /// every glyph, icon and image ever drawn. D3D11 keeps a texture alive
+    /// while a submitted frame still reads it.
+    fn clear(&self) {
+        self.0.lock().clear(|textures| {
+            textures.monochrome_textures = AtlasTextureList::default();
+            textures.polychrome_textures = AtlasTextureList::default();
+            textures.subpixel_textures = AtlasTextureList::default();
+        });
+    }
 }
 
 impl AtlasBackend for DirectXAtlasTextures {
@@ -416,5 +427,25 @@ mod tests {
 
         let tile_b = insert_tile(&atlas, big_key_b, big);
         assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
+    }
+
+    #[test]
+    fn clear_drops_every_texture() {
+        let Some(atlas) = create_atlas() else {
+            return;
+        };
+        let size = Size {
+            width: DevicePixels(64),
+            height: DevicePixels(64),
+        };
+        let tile = insert_tile(&atlas, make_image_key(1), size);
+        assert!(atlas.get_texture_view(tile.texture_id).is_some());
+
+        atlas.clear();
+
+        assert!(atlas.get_texture_view(tile.texture_id).is_none());
+        // The key is gone too, so drawing it again uploads it afresh.
+        let again = insert_tile(&atlas, make_image_key(1), size);
+        assert!(atlas.get_texture_view(again.texture_id).is_some());
     }
 }

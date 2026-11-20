@@ -54,6 +54,7 @@ manifests, and rejects screen-capture builds in gpui-pre/build.rs pending licens
 review. The retained framework code remains Apache-2.0.
 Monocode also fixes Windows Explorer reveal by initializing COM on background
 workers, normalizing filesystem paths and releasing Shell item allocations.
+MCode lets the Windows sprite atlas be emptied, so idle trims free its textures.
 Unused upstream examples and their demo assets are omitted, together with four
 upstream SVG tests requiring font fixtures absent from the published crate.
 The small EXIF image regression fixture is retained under tests/assets.
