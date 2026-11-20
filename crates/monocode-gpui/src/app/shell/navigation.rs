@@ -227,6 +227,27 @@ impl Shell {
         .detach();
     }
 
+    /// Opens a fork in a tab and activates it, with the message it was cut at
+    /// waiting in its composer, unsent.
+    pub(super) fn open_fork(
+        &mut self,
+        summary: Session,
+        prompt: String,
+        attachments: Vec<std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let id = summary.id;
+        self.add(summary, cx);
+        self.sessions[&id].update(cx, |view, cx| view.prefill(prompt, attachments, cx));
+        self.order.retain(|s| *s != id);
+        self.order.insert(0, id);
+        self.invalidate_chrome(cx);
+        cx.spawn(async move |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| this.activate_session(id, window, cx));
+        })
+        .detach();
+    }
+
     pub(super) fn notify_sidebar(&self, cx: &mut Context<Self>) {
         self.sidebar_list.invalidate_structure();
         self.sidebar_frame.update(cx, |_, cx| cx.notify());

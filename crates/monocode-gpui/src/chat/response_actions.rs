@@ -15,8 +15,10 @@ pub(crate) enum Request {
     QuoteSelection {
         text: String,
     },
-    EditLastTurn {
+    /// A hover action on the user message whose first source row is `turn`.
+    Cut {
         turn: usize,
+        cut: Cut,
     },
     Draft {
         send: bool,
@@ -31,6 +33,14 @@ pub(crate) enum Request {
         kind: TransferKind,
         anchor: AnchorSlot,
     },
+}
+/// What follows a cut just before a user message: Edit recalls the message
+/// and cuts when it is sent again, Rewind cuts now, Fork cuts a copy.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Cut {
+    Edit,
+    Rewind,
+    Fork,
 }
 #[derive(Clone)]
 pub(crate) struct Transfer {

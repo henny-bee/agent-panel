@@ -797,7 +797,7 @@ impl Conversation {
                 self.remote_plan_request(id, text, *build, cx)
             }
             ResponseRequest::QuoteSelection { text } => self.mono_quote(text, window, cx),
-            ResponseRequest::EditLastTurn { turn } => self.begin_edit_last_turn(*turn, window, cx),
+            ResponseRequest::Cut { turn, cut } => self.begin_cut(*turn, *cut, window, cx),
             ResponseRequest::Draft { send } => self.draft_action(*send, cx),
             ResponseRequest::SaveNote {
                 turn,

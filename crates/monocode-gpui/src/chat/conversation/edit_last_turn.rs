@@ -1,6 +1,9 @@
-//! Last-turn editing recalls first, and rewinds only when the user resubmits.
+//! Cuts at a past user message. Edit recalls it and cuts only when the user
+//! resubmits, Rewind cuts after a confirm, and Fork cuts a copy into a new chat.
+// Every cut is conversation only: no provider path here changes files on disk.
 use super::*;
-use monocode_core::{provider, session::transcript::Row, store::EditSnapshot};
+use crate::chat::response_actions::Cut;
+use monocode_core::{provider, store::EditSnapshot};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -10,6 +13,8 @@ pub(super) struct State {
     /// A confirmed provider mutation followed by a storage conflict requires a
     /// history reload, rather than silently appending to inconsistent context.
     blocked: bool,
+    /// The user confirmed the rewind that sending the prepared edit performs.
+    confirmed: bool,
 }
 impl State {
     pub(super) fn pending(&self) -> bool {
@@ -17,17 +22,26 @@ impl State {
     }
 }
 
-fn latest_user(rows: &[Row]) -> Option<usize> {
-    rows.iter().rposition(|row| row.first && row.role == "user")
-}
 impl Conversation {
+    /// Drops a recalled edit, or lifts a recovery guard: cancelling is the way
+    /// back into a guarded chat, taking the provider's context as it is.
     pub(super) fn cancel_edit_last_turn(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.editing_last_turn.active || self.editing_last_turn.blocked {
+        if self.editing_last_turn.active {
             return false;
         }
-        if self.editing_last_turn.prepared.take().is_none() {
+        if self.editing_last_turn.blocked {
+            if let Err(error) =
+                locked(&self.store).and_then(|store| store.clear_edit_recovery(self.summary.id))
+            {
+                self.status = format!("Could not clear the edit guard: {error}");
+                cx.notify();
+                return true;
+            }
+            self.editing_last_turn.blocked = false;
+        } else if self.editing_last_turn.prepared.is_none() {
             return false;
         }
+        self.editing_last_turn.prepared = None;
         self.status = "Ready".into();
         self.run_history_actions(cx);
         cx.notify();
@@ -54,7 +68,25 @@ impl Conversation {
         self.status = "Finish or cancel the current message edit to continue".into();
         cx.notify();
     }
-    fn can_prepare_edit(&self, cx: &gpui::App) -> bool {
+    /// A durable recovery guard holds edits and sends until Cancel edit lifts it.
+    fn recovery_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        match locked(&self.store).and_then(|store| store.edit_recovery_reason(self.summary.id)) {
+            Ok(None) => return false,
+            Ok(Some(reason)) => {
+                self.editing_last_turn.blocked = true;
+                self.status = reason;
+            }
+            Err(error) => {
+                self.status = format!(
+                    "Could not verify conversation history: {error}. Your draft is preserved."
+                );
+            }
+        }
+        cx.notify();
+        true
+    }
+    /// A fork leaves the composer alone, so only Edit and Rewind need it empty.
+    fn can_prepare_edit(&self, cut: Cut, cx: &gpui::App) -> bool {
         self.history_ready()
             && !self.busy
             && !self.stopping
@@ -62,6 +94,7 @@ impl Conversation {
             && self.settings.mono.is_none()
             && !self.settings.worktree_removed
             && provider::supports_rewind(Kind::from_id(&self.summary.provider))
+            && (cut != Cut::Fork || provider::supports_fork(Kind::from_id(&self.summary.provider)))
             && !self.account_switching
             && !self.preparing_worktree
             && !self.attaching
@@ -76,46 +109,110 @@ impl Conversation {
             && self.follow_ups.sending.is_none()
             && self.follow_ups.requested.is_none()
             && self.follow_ups.state.revision == self.follow_ups.persisted
-            && self.input.read(cx).content.is_empty()
-            && !self.input.read(cx).is_composing()
-            && self.attachments.is_empty()
+            && (cut == Cut::Fork
+                || (self.input.read(cx).content.is_empty()
+                    && !self.input.read(cx).is_composing()
+                    && self.attachments.is_empty()))
     }
-    pub(super) fn begin_edit_last_turn(
+    /// Asks before a cut. `then` runs only when the first button is chosen.
+    fn confirm_cut(
+        &mut self,
+        title: &'static str,
+        detail: String,
+        action: &'static str,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                window.prompt(
+                    gpui::PromptLevel::Warning,
+                    title,
+                    Some(detail.as_str()),
+                    &[action, "Cancel"],
+                    cx,
+                )
+            }) else {
+                return;
+            };
+            if answer.await == Ok(0) {
+                let _ = this.update(cx, then);
+            }
+        })
+        .detach();
+    }
+    /// Starts a cut at the user message whose first row is `turn`.
+    pub(super) fn begin_cut(
         &mut self,
         turn: usize,
+        cut: Cut,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.is_remote() {
-            self.status = "Editing the last message is not supported by this remote host.".into();
+            self.status = "Rewinding is not supported by this remote host.".into();
             cx.notify();
             return;
         }
         // The action is tied to a painted source row. A history restoration may
         // replace that row, so never replay this intent against an empty cache.
-        if !self.can_prepare_edit(cx) {
+        if self.recovery_blocked(cx) || !self.can_prepare_edit(cut, cx) {
+            return;
+        }
+        let rows = self.transcript.read(cx).source_rows();
+        if !rows
+            .get(turn)
+            .is_some_and(|row| row.first && row.role == "user")
+        {
+            return;
+        }
+        if cut == Cut::Rewind {
+            let end = (turn + 1..rows.len())
+                .find(|&row| rows[row].first)
+                .unwrap_or(rows.len());
+            let text: String = rows[turn..end]
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect();
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let preview = match text.char_indices().nth(140) {
+                Some((at, _)) => format!("“{}…”", &text[..at]),
+                None => format!("“{text}”"),
+            };
+            self.confirm_cut(
+                "Rewind to this message?",
+                preview,
+                "Rewind",
+                move |this, cx| this.prepare_cut(turn, cut, cx),
+                cx,
+            );
+            return;
+        }
+        if cut == Cut::Edit {
+            window.focus(&self.input.focus_handle(cx), cx);
+        }
+        self.prepare_cut(turn, cut, cx);
+    }
+    fn prepare_cut(&mut self, turn: usize, cut: Cut, cx: &mut Context<Self>) {
+        if !self.can_prepare_edit(cut, cx) {
             return;
         }
         let rows = self.transcript.read(cx).source_rows().to_vec();
-        if latest_user(&rows) != Some(turn) {
+        if !rows
+            .get(turn)
+            .is_some_and(|row| row.first && row.role == "user")
+        {
             return;
         }
-        let exact = self
-            .settings
-            .turns
-            .iter()
-            .max_by_key(|(row, _)| **row)
-            .and_then(|(_, info)| info.provider_turn_id.clone());
         self.editing_last_turn.active = true;
-        self.status = "Preparing edit…".into();
+        self.status = "Preparing…".into();
         self.response_menu = None;
         let store = self.store.clone();
         let id = self.summary.id;
         let binding = self.summary.provider_id.clone();
-        let work = cx.background_executor().spawn(async move {
-            locked(&store)?.prepare_edit_last_turn(id, &rows, exact.as_deref())
-        });
-        window.focus(&self.input.focus_handle(cx), cx);
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.prepare_edit(id, &rows, turn) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -124,21 +221,26 @@ impl Conversation {
                     Ok(edit)
                         if this.summary.provider_id == binding
                             && edit.matches(this.transcript.read(cx).source_rows())
-                            && this.input.read(cx).content.is_empty()
-                            && this.attachments.is_empty()
                             && !this.busy
-                            && !this.input.read(cx).is_composing() =>
+                            && this.can_prepare_edit(cut, cx) =>
                     {
-                        this.input
-                            .update(cx, |input, cx| input.set_text(edit.prompt.clone(), cx));
-                        this.attachments = edit.attachments.clone();
-                        this.editing_last_turn.prepared = Some(edit);
-                        this.status = "Editing last message — send to replace its turn".into();
+                        if cut == Cut::Fork {
+                            this.run_fork(edit, cx);
+                        } else {
+                            this.input
+                                .update(cx, |input, cx| input.set_text(edit.prompt.clone(), cx));
+                            this.attachments = edit.attachments.clone();
+                            this.editing_last_turn.prepared = Some(edit.clone());
+                            if cut == Cut::Rewind {
+                                this.run_cut(edit, false, cx);
+                            } else {
+                                this.status =
+                                    "Editing message — sending it restarts from here".into();
+                            }
+                        }
                     }
-                    Ok(_) => {
-                        this.status = "Composer or conversation changed; edit cancelled".into()
-                    }
-                    Err(error) => this.status = format!("Could not edit last message: {error}"),
+                    Ok(_) => this.status = "Composer or conversation changed; cancelled".into(),
+                    Err(error) => this.status = format!("Could not prepare the cut: {error}"),
                 }
                 if !this.editing_last_turn.pending() {
                     this.run_history_actions(cx);
@@ -154,26 +256,12 @@ impl Conversation {
     /// Called before ordinary send consumes composer text or attachments.
     /// Returns true while this edit owns the submission (including rejection).
     pub(super) fn submit_edited(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.editing_last_turn.active || self.editing_last_turn.blocked {
+        let confirmed = std::mem::take(&mut self.editing_last_turn.confirmed);
+        if self.editing_last_turn.active
+            || self.editing_last_turn.blocked
+            || self.recovery_blocked(cx)
+        {
             return true;
-        }
-        let recovery =
-            locked(&self.store).and_then(|store| store.edit_recovery_reason(self.summary.id));
-        match recovery {
-            Ok(Some(reason)) => {
-                self.editing_last_turn.blocked = true;
-                self.status = reason;
-                cx.notify();
-                return true;
-            }
-            Err(error) => {
-                self.status = format!(
-                    "Could not verify conversation history: {error}. Your draft is preserved."
-                );
-                cx.notify();
-                return true;
-            }
-            Ok(None) => {}
         }
         let Some(edit) = self.editing_last_turn.prepared.clone() else {
             return false;
@@ -224,32 +312,57 @@ impl Conversation {
             cx.notify();
             return true;
         }
+        if !confirmed {
+            self.confirm_cut(
+                "Rewind and send this edit?",
+                "Your edit replaces the original message. Everything after it is removed.".into(),
+                "Rewind and send",
+                |this, cx| {
+                    this.editing_last_turn.confirmed = true;
+                    this.send(cx);
+                },
+                cx,
+            );
+            return true;
+        }
+        self.run_cut(edit, true, cx);
+        true
+    }
+    /// The request a cut sends to the provider: the message's text, which
+    /// Claude and Pi check against their own copy, and no prompt to run.
+    fn cut_request(
+        &mut self,
+        edit: &EditSnapshot,
+        cx: &mut Context<Self>,
+    ) -> Option<provider::Request> {
         let kind = Kind::from_id(&self.summary.provider);
         let Some(binary) = provider::resolve(kind) else {
             self.status = format!(
-                "{} executable was not found; edited prompt preserved",
+                "{} executable was not found; history was preserved",
                 kind.label()
             );
             cx.notify();
-            return true;
+            return None;
         };
         self.attach_account(cx);
         let mut settings = self.settings.clone();
         settings.environment.extend(self.app_environment.clone());
-        let request = provider::Request {
+        Some(provider::Request {
             kind,
             binary,
             cwd: PathBuf::from(self.execution_cwd()),
-            // No prompt is sent. Claude's rewind checks its transcript against
-            // the message being replaced.
-            prompt: if kind == Kind::Claude {
-                edit.prompt.clone()
-            } else {
-                String::new()
-            },
+            prompt: edit.prompt.clone(),
             provider_id: Some(edit.provider_id.clone()),
             model: self.model.clone(),
             settings,
+        })
+    }
+    /// Cuts this conversation before the prepared message, in the provider and
+    /// then locally. `send` sends the composer afterwards (Edit); otherwise the
+    /// recalled message waits in the composer (Rewind).
+    fn run_cut(&mut self, edit: EditSnapshot, send: bool, cx: &mut Context<Self>) {
+        let Some(request) = self.cut_request(&edit, cx) else {
+            return;
         };
         let prompt = self.input.read(cx).content.to_string();
         let attachments = self.attachments.clone();
@@ -258,51 +371,70 @@ impl Conversation {
         // Keep the visible draft in place until confirmation, including on a
         // rejected RPC. IME composition was checked before making it read-only.
         self.input.update(cx, |input, _| input.set_read_only(true));
-        self.status = "Rewinding last turn…".into();
+        self.status = "Rewinding…".into();
         let store = self.store.clone();
         let id = self.summary.id;
         let work = cx.background_executor().spawn(async move {
-            monocode_core::session::composer::validate_attachments(&checked_attachments)?;
-            locked(&store)?.validate_edit_last_turn(id, &edit)?;
-            let binding = match provider::rewind_last_turn(request, edit.provider_turn_id.as_deref()) {
-                Ok(binding)=>binding,
-                Err(error)=> {
-                    if error.provider_may_have_changed {
+            if send {
+                monocode_core::session::composer::validate_attachments(&checked_attachments)?;
+            }
+            locked(&store)?.validate_edit(id, &edit)?;
+            // Nothing the user said comes before the cut, so the next send
+            // starts a fresh provider session.
+            let binding = if edit.first() {
+                None
+            } else {
+                match provider::rewind_to(
+                    request,
+                    edit.provider_turn_id.as_deref(),
+                    edit.later(),
+                    edit.sent_at(),
+                ) {
+                    Ok(binding) => binding,
+                    Err(error) if error.provider_may_have_changed => {
                         locked(&store)?.mark_edit_recovery_required(id)?;
                         return Err(format!("Provider recovery required: {error}"));
                     }
-                    return Err(error.to_string());
+                    Err(error) => return Err(error.to_string()),
                 }
             };
             // Provider confirmation is the only path to the destructive write.
-            match locked(&store)?.finish_edit_last_turn(id, &edit, &binding) {
+            let in_place = binding.as_deref() == Some(edit.provider_id.as_str());
+            match locked(&store)?.finish_edit(id, &edit, binding.as_deref()) {
                 Ok(()) => Ok((edit, binding)),
-                Err(error) => Err(format!(
+                Err(error) if in_place => Err(format!(
                     "Provider recovery required: Provider rewound, but local history changed: {error}"
                 )),
+                Err(error) => Err(error),
             }
         });
-        cx.spawn(async move |this,cx| {
-            let result: Result<(EditSnapshot,String),String> = work.await;
-            let _ = this.update(cx,|this,cx| {
+        cx.spawn(async move |this, cx| {
+            let result: Result<(EditSnapshot, Option<String>), String> = work.await;
+            let _ = this.update(cx, |this, cx| {
                 this.editing_last_turn.active = false;
-                this.input.update(cx,|input,_| input.set_read_only(false));
+                this.input.update(cx, |input, _| input.set_read_only(false));
                 match result {
-                    Ok((edit,binding)) => {
+                    Ok((edit, binding)) => {
                         this.editing_last_turn.prepared = None;
-                        this.summary.provider_id = Some(binding);
-                        this.settings.turns.retain(|&row,_| row < edit.start);
-                        this.transcript.update(cx,|view,cx| view.replace_history(edit.rows[..edit.start].to_vec(),cx));
+                        this.summary.provider_id = binding;
+                        this.settings.turns.retain(|&row, _| row < edit.start);
+                        this.transcript.update(cx, |view, cx| {
+                            view.replace_history(edit.rows[..edit.start].to_vec(), cx)
+                        });
                         this.summary.has_messages = edit.start > 0;
                         this.context = None;
-                        if this.input.read(cx).content.as_str() == prompt && this.attachments == attachments {
+                        if !send {
+                            this.status = "Rewound. The message is back in the box.".into();
+                        } else if this.input.read(cx).content.as_str() == prompt
+                            && this.attachments == attachments
+                        {
                             // Normal submit still owns mode commands, attachments,
                             // account checks, durable acceptance and failure recovery.
                             this.send(cx);
                         } else {
                             // Programmatic composer updates can bypass read-only.
                             // Preserve both the new composer and the accepted edit.
-                            this.preserve_interrupted_edit(prompt,attachments,edit.start,cx);
+                            this.preserve_interrupted_edit(prompt, attachments, edit.start, cx);
                         }
                         this.run_history_actions(cx);
                     }
@@ -310,17 +442,78 @@ impl Conversation {
                         if error.starts_with("Provider recovery required:") {
                             this.editing_last_turn.blocked = true;
                             this.editing_last_turn.prepared = None;
-                            this.status = format!("{error}. Start a new conversation; your edited draft is preserved here.");
+                            this.status = format!("{error}. Choose Cancel edit to continue here anyway; your draft is preserved.");
                         } else {
-                            this.status = format!("Could not rewind last turn: {error}. Your edited prompt is preserved.");
+                            this.status = format!("Could not rewind: {error}. The message is in the box; send it to retry, or cancel the edit.");
                         }
                     }
                 }
-                cx.emit(SessionChanged); cx.notify();
+                cx.emit(SessionChanged);
+                cx.notify();
             });
-        }).detach();
+        })
+        .detach();
         cx.notify();
-        true
+    }
+    /// Copies the conversation before the prepared message into a new chat
+    /// with the provider cut at the same point. This chat stays as it is.
+    fn run_fork(&mut self, edit: EditSnapshot, cx: &mut Context<Self>) {
+        let Some(request) = self.cut_request(&edit, cx) else {
+            return;
+        };
+        self.editing_last_turn.active = true;
+        self.status = "Forking…".into();
+        let store = self.store.clone();
+        let id = self.summary.id;
+        let work = cx.background_executor().spawn(async move {
+            locked(&store)?.validate_edit(id, &edit)?;
+            let binding = if edit.first() {
+                None
+            } else {
+                provider::rewind_to(
+                    request,
+                    edit.provider_turn_id.as_deref(),
+                    edit.later(),
+                    edit.sent_at(),
+                )
+                .map_err(|error| error.to_string())?
+            };
+            let fork = locked(&store)?.fork_edit(id, &edit, binding.as_deref())?;
+            Ok::<_, String>((fork, edit))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.editing_last_turn.active = false;
+                match result {
+                    Ok((fork, edit)) => {
+                        this.status = format!("Forked into “{}”", fork.title);
+                        cx.emit(Forked(fork, edit.prompt, edit.attachments));
+                    }
+                    Err(error) => this.status = format!("Could not fork: {error}"),
+                }
+                this.run_history_actions(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    /// Puts a message in the composer without sending it, once history is in.
+    pub(crate) fn prefill(
+        &mut self,
+        prompt: String,
+        attachments: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.needs_history_restore() {
+            self.defer_history_action(move |this, cx| this.prefill(prompt, attachments, cx), cx);
+            return;
+        }
+        self.input
+            .update(cx, |input, cx| input.set_text(prompt, cx));
+        self.attachments = attachments;
+        cx.notify();
     }
     fn preserve_interrupted_edit(
         &mut self,
@@ -347,7 +540,8 @@ impl Conversation {
             self.follow_ups.state.messages.push(message);
         }
         self.save_follow_ups(cx);
-        self.status = "Last turn rewound; the edited prompt was saved as a draft because the composer changed".into();
+        self.status =
+            "Rewound; the edited prompt was saved as a draft because the composer changed".into();
     }
 }
 
@@ -360,7 +554,7 @@ mod tests {
     #[gpui::test]
     fn cancelled_recall_preserves_history_and_native_provider_binding(cx: &mut TestAppContext) {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
-        let mut session = store.create("codex", "/project").unwrap();
+        let mut session = store.create("pi", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         session.provider_id = Some("thread".into());
         let mut transcript = Transcript::default();
@@ -369,9 +563,7 @@ mod tests {
         transcript.begin("assistant");
         transcript.append("Answer");
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
-        let edit = store
-            .prepare_edit_last_turn(session.id, &transcript.rows, Some("turn"))
-            .unwrap();
+        let edit = store.prepare_edit(session.id, &transcript.rows, 0).unwrap();
         let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
         chat.update(cx, |chat, cx| {
             chat.loaded = true;
@@ -421,7 +613,7 @@ mod tests {
     #[gpui::test]
     fn local_commands_and_cancel_never_remove_recalled_history(cx: &mut TestAppContext) {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
-        let mut session = store.create("codex", "/project").unwrap();
+        let mut session = store.create("pi", "/project").unwrap();
         store.provider_id(session.id, "thread").unwrap();
         session.provider_id = Some("thread".into());
         let mut transcript = Transcript::default();
@@ -430,9 +622,7 @@ mod tests {
         transcript.begin("assistant");
         transcript.append("Answer");
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
-        let edit = store
-            .prepare_edit_last_turn(session.id, &transcript.rows, Some("turn"))
-            .unwrap();
+        let edit = store.prepare_edit(session.id, &transcript.rows, 0).unwrap();
         let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
         chat.update(cx, |chat, cx| {
             chat.loaded = true;
@@ -458,7 +648,7 @@ mod tests {
         });
     }
     #[gpui::test]
-    fn persisted_recovery_guard_preserves_a_new_composer_before_normal_send(
+    fn persisted_recovery_guard_preserves_a_new_composer_until_cancel_lifts_it(
         cx: &mut TestAppContext,
     ) {
         let mut store = Store::open(Path::new(":memory:")).unwrap();
@@ -469,13 +659,12 @@ mod tests {
         transcript.begin("user");
         transcript.append("Original");
         store.write_rows(session.id, 0, &transcript.rows).unwrap();
-        let edit = store
-            .prepare_edit_last_turn(session.id, &transcript.rows, None)
-            .unwrap();
+        let edit = store.prepare_edit(session.id, &transcript.rows, 0).unwrap();
         store.provider_id(session.id, "changed").unwrap();
+        // An in-place rewind whose local write fails leaves the guard.
         assert!(
             store
-                .finish_edit_last_turn(session.id, &edit, "fork")
+                .finish_edit(session.id, &edit, Some("original"))
                 .is_err()
         );
         let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
@@ -487,7 +676,17 @@ mod tests {
             assert!(chat.submit_edited(cx));
             assert!(chat.editing_last_turn.blocked);
             assert_eq!(chat.input.read(cx).content, "Unsent edited prompt");
-            assert!(!chat.cancel_edit_last_turn(cx));
+            // Cancel edit is the way out: it lifts the guard and keeps the draft.
+            assert!(chat.cancel_edit_last_turn(cx));
+            assert!(!chat.editing_last_turn.pending());
+            assert_eq!(chat.input.read(cx).content, "Unsent edited prompt");
+            let store = locked(&chat.store).unwrap();
+            assert!(
+                store
+                    .edit_recovery_reason(chat.summary.id)
+                    .unwrap()
+                    .is_none()
+            );
         });
     }
 }

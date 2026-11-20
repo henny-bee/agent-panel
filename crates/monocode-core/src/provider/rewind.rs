@@ -41,34 +41,34 @@ pub fn supports_rewind(kind: Kind) -> bool {
     )
 }
 
-const CLAUDE_AT: &str = "?at=";
-const CLAUDE_DROPS: &str = "&drops=";
-
-/// Splits a Claude binding into its session and a rewind that is still pending:
-/// the entry to resume at, and the prompt of the turn that resume discards.
-pub(crate) fn claude_resume(binding: &str) -> (&str, Option<(&str, &str)>) {
-    binding
-        .split_once(CLAUDE_AT)
-        .and_then(|(session, rest)| {
-            let (at, drops) = rest.split_once(CLAUDE_DROPS)?;
-            Some((session, Some((at, drops))))
-        })
-        .unwrap_or((binding, None))
+/// Whether a cut can go to a copy and leave the original conversation alone.
+/// Codex reverts its thread in place, and the installed app-server's
+/// `thread/fork` is unverified, so Codex only rewinds.
+pub fn supports_fork(kind: Kind) -> bool {
+    supports_rewind(kind) && kind != Kind::Codex
 }
 
-/// A pending rewind forks the session before the dropped turn, leaving the
-/// original untouched. The fork's own id then replaces the binding.
+const CLAUDE_AT: &str = "?at=";
+
+/// Splits a Claude binding into its session and the entry a pending rewind
+/// resumes at: `s?at=e` -> `("s", Some("e"))`. Bindings saved with an older
+/// `&drops=` suffix keep working; the suffix is ignored.
+pub(crate) fn claude_resume(binding: &str) -> (&str, Option<&str>) {
+    match binding.split_once(CLAUDE_AT) {
+        Some((session, rest)) => (session, rest.split('&').next()),
+        None => (binding, None),
+    }
+}
+
+/// A pending rewind forks the session at its entry, leaving the original
+/// untouched. The fork's own id then replaces the binding.
+// `--resume-drops-turn` is not used: it refuses a resume that drops more than
+// one turn, and a cut can drop many.
 pub(super) fn claude_resume_args(command: &mut Command, binding: &str) {
-    let (session, rewind) = claude_resume(binding);
+    let (session, at) = claude_resume(binding);
     command.args(["--resume", session]);
-    if let Some((at, drops)) = rewind {
-        command.args([
-            "--resume-session-at",
-            at,
-            "--resume-drops-turn",
-            drops,
-            "--fork-session",
-        ]);
+    if let Some(at) = at {
+        command.args(["--resume-session-at", at, "--fork-session"]);
     }
 }
 
@@ -151,10 +151,16 @@ pub fn claude_first_prompt(
         .find(|text| !text.trim().is_empty() && !text.trim_start().starts_with('<'))
 }
 
-/// Finds the last prompt on the active chain of a Claude transcript. Returns the
-/// entry before it and the prompt itself. `expected` is the message being edited:
-/// a transcript that ends with a different prompt is left alone.
-fn claude_boundary(transcript: &str, expected: &str) -> Result<(String, String), String> {
+/// Finds the prompt `later` prompts before the end of the active chain, which
+/// ends at `from` or else at the transcript's last entry. Returns the entry
+/// before that prompt, or None when nothing precedes it. `expected` is the
+/// message being cut at: a prompt with different text is left alone.
+fn claude_boundary(
+    transcript: &str,
+    expected: &str,
+    mut later: usize,
+    from: Option<&str>,
+) -> Result<Option<String>, String> {
     let mut entries = HashMap::new();
     let mut cursor = None;
     for line in transcript.lines().filter(|line| line.contains("\"uuid\"")) {
@@ -176,53 +182,53 @@ fn claude_boundary(transcript: &str, expected: &str) -> Result<(String, String),
             ),
         );
     }
+    if let Some(from) = from {
+        cursor = Some(from.to_owned());
+    }
     // A chain is never longer than the transcript; the bound only stops a cycle.
     for _ in 0..entries.len() {
-        let Some((id, (parent, prompt))) = cursor
-            .take()
-            .and_then(|id| entries.get(&id).map(|entry| (id, entry)))
-        else {
+        let Some((parent, prompt)) = cursor.take().and_then(|id| entries.get(&id)) else {
             break;
         };
+        cursor = parent.clone();
         let Some(prompt) = prompt else {
-            cursor = parent.clone();
             continue;
         };
+        if later > 0 {
+            later -= 1;
+            continue;
+        }
         if !squash(prompt).contains(&squash(expected)) {
             return Err(
-                "Claude's saved conversation does not end with this message; history was preserved"
+                "Claude's saved conversation does not match this message; history was preserved"
                     .into(),
             );
         }
-        let at = parent.clone().ok_or(
-            "Editing the first message is not supported for Claude; start a new conversation",
-        )?;
-        return Ok((at, id));
+        return Ok(parent.clone());
     }
-    Err("Claude did not save a user message to edit".into())
+    Err("Claude did not save this message; history was preserved".into())
 }
 
 /// Claude has no in-process rollback. This asks the CLI whether a resume that
-/// drops the last turn would be accepted, without sending a prompt, and returns
-/// the binding that makes the next launch perform it.
-fn claude_rewind(request: &Request) -> Result<String, RewindError> {
-    let session = request
+/// ends just before the prompt being cut would be accepted, without sending a
+/// prompt, and returns the binding that makes the next launch perform it.
+fn claude_rewind(request: &Request, later: usize) -> Result<Option<String>, RewindError> {
+    let binding = request
         .provider_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
         .ok_or("The conversation has no saved provider session to rewind")?;
-    // ponytail: one pending rewind per session. Dropping two turns in a row
-    // would need a resume that discards both, which the drop guard refuses.
-    if claude_resume(session).1.is_some() {
-        return Err("Send a message before editing the last one again".into());
-    }
+    // A pending rewind already ends the conversation at its entry.
+    let (session, pending) = claude_resume(binding);
     let transcript = claude_transcript(&request.settings.account, session)
         .ok_or("Could not find the Claude conversation to rewind")?;
     let transcript = std::fs::read_to_string(transcript)
         .map_err(|error| format!("Could not read the Claude conversation: {error}"))?;
-    let (at, drops) = claude_boundary(&transcript, &request.prompt)?;
-    let binding = format!("{session}{CLAUDE_AT}{at}{CLAUDE_DROPS}{drops}");
-    // The warm process still holds the turn about to be dropped.
+    let Some(at) = claude_boundary(&transcript, &request.prompt, later, pending)? else {
+        return Ok(None);
+    };
+    let binding = format!("{session}{CLAUDE_AT}{at}");
+    // The warm process still holds the turns about to be dropped.
     parked::discard_session(request);
     let mut command = Command::new(&request.binary);
     crate::vcs::git::scm::launch_env::apply_gui_env(&mut command);
@@ -273,24 +279,30 @@ fn claude_rewind(request: &Request) -> Result<String, RewindError> {
             .trim()
             .into());
     }
-    Ok(binding)
+    Ok(Some(binding))
 }
 
-/// Runs on a worker, after the caller has reserved its conversation. Returns the
-/// provider binding to persist with the confirmed local truncation. Pi forks to
-/// a new session; Codex keeps the current thread. No prompt is sent here.
-pub fn rewind_last_turn(
+/// Cuts the provider's conversation just before the prompt `request.prompt`,
+/// which has `later` user messages after it. Runs on a worker, after the caller
+/// has reserved its conversation, and sends no prompt. Returns the binding to
+/// persist with the confirmed local truncation, or None when no provider
+/// history survives. Claude, OpenCode and Pi cut a copy and leave the original
+/// session as it was; Codex reverts its thread in place before `turn_id`.
+/// Files on disk are never touched.
+pub fn rewind_to(
     request: Request,
-    before_turn: Option<&str>,
-) -> Result<String, RewindError> {
+    turn_id: Option<&str>,
+    later: usize,
+    sent_at: Option<u64>,
+) -> Result<Option<String>, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
-        return Err("This provider does not support editing the last turn".into());
+        return Err("This provider does not support rewinding".into());
     }
     if request.kind == Kind::OpenCode {
-        return super::opencode::rewind(&request, before_turn);
+        return super::opencode::rewind(&request, sent_at);
     }
     if request.kind == Kind::Claude {
-        return claude_rewind(&request);
+        return claude_rewind(&request, later);
     }
     let session = request
         .provider_id
@@ -327,16 +339,18 @@ pub fn rewind_last_turn(
             return Err("Pi resumed a different session; history was preserved".into());
         }
         if state["isStreaming"] == true || state["isCompacting"] == true {
-            return Err("Stop the current turn before editing the last message".into());
+            return Err("Stop the current turn before rewinding".into());
         }
         let messages = rpc.call("get_fork_messages", json!({}))?;
-        let entry = last_fork_entry(&messages)?;
+        let entry = fork_entry(&messages, &request.prompt, later)?;
         let fork = rpc.call("fork", json!({"entryId":entry}))?;
         if fork["cancelled"] == true {
-            return Err("Edit cancelled".into());
+            return Err("Rewind cancelled".into());
         }
         let state = rpc.call("get_state", json!({}))?;
-        return pi_binding(&state).ok_or_else(|| "Pi did not expose the forked session".into());
+        return pi_binding(&state)
+            .map(Some)
+            .ok_or_else(|| "Pi did not expose the forked session".into());
     }
     rpc.call("initialize", json!({"clientInfo":{"name":"monocode_native","title":"MonoCode Native","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))?;
     write_json(&mut rpc.wire.stdin, json!({"method":"initialized"}))?;
@@ -353,44 +367,40 @@ pub fn rewind_last_turn(
         .flatten()
         .any(|turn| matches!(turn["status"].as_str(), Some("inProgress" | "running")))
     {
-        return Err("Stop the current turn before editing the last message".into());
+        return Err("Stop the current turn before rewinding".into());
     }
-    let before_turn = if let Some(id) = before_turn.filter(|id| !id.trim().is_empty()) {
-        id.to_owned()
-    } else {
-        let page = rpc.call(
-            "thread/turns/list",
-            json!({"threadId":session,"limit":100,"sortDirection":"desc","itemsView":"summary"}),
-        )?;
-        page["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|turn| {
-                turn["items"]
-                    .as_array()
-                    .is_some_and(|items| items.iter().any(|item| item["type"] == "userMessage"))
-            })
-            .and_then(|turn| turn["id"].as_str())
-            .ok_or("Codex did not expose a user turn id to edit")?
-            .to_owned()
-    };
+    let turn_id = turn_id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("Codex did not expose this message's turn; history was preserved")?;
     rpc.call(
         "thread/revert",
-        json!({"threadId":session,"beforeTurnId":before_turn}),
+        json!({"threadId":session,"beforeTurnId":turn_id}),
     )?;
-    Ok(session.into())
+    Ok(Some(session.into()))
 }
 
-fn last_fork_entry(data: &Value) -> Result<String, String> {
-    data["messages"]
+/// The fork entry of the prompt `later` prompts before Pi's last one. A prompt
+/// whose text doesn't hold `expected` means the histories differ.
+fn fork_entry(data: &Value, expected: &str, later: usize) -> Result<String, String> {
+    let entry = data["messages"]
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|item| {
+            item["entryId"]
+                .as_str()
+                .is_some_and(|id| !id.trim().is_empty())
+        })
         .rev()
-        .find_map(|item| item["entryId"].as_str().filter(|id| !id.trim().is_empty()))
-        .map(str::to_owned)
-        .ok_or_else(|| "No user message to edit".into())
+        .nth(later)
+        .ok_or("Pi did not save this message; history was preserved")?;
+    let text = entry["text"].as_str().unwrap_or("");
+    if !text.is_empty() && !squash(text).contains(&squash(expected)) {
+        return Err(
+            "Pi's saved conversation does not match this message; history was preserved".into(),
+        );
+    }
+    Ok(entry["entryId"].as_str().unwrap_or_default().to_owned())
 }
 fn pi_binding(state: &Value) -> Option<String> {
     let id = state["sessionId"]
@@ -550,7 +560,7 @@ mod tests {
             .to_string()
     }
     #[test]
-    fn claude_boundary_is_the_entry_before_the_last_prompt_on_the_active_chain() {
+    fn claude_boundary_is_the_entry_before_the_nth_prompt_on_the_active_chain() {
         let transcript = [
             claude_line("p1", None, "user", json!("First")),
             claude_line("a1", Some("p1"), "assistant", json!([{"type":"text","text":"One"}])),
@@ -559,29 +569,34 @@ mod tests {
             claude_line("a2", Some("p2"), "assistant", json!([{"type":"tool_use"}])),
             claude_line("t2", Some("a2"), "user", json!([{"type":"tool_result","content":"ok"}])),
             claude_line("i2", Some("t2"), "user", json!([{"type":"text","text":"[Request interrupted by user]"}])),
-            // A subagent's prompt is not part of the conversation being edited.
+            claude_line("p3", Some("i2"), "user", json!("Third")),
+            // A subagent's prompt is not part of the conversation being cut.
             json!({"uuid":"s1","parentUuid":null,"type":"user","isSidechain":true,"message":{"content":"Side"}}).to_string(),
             "{\"type\":\"last-prompt\"}".into(),
         ]
         .join("\n");
-        assert_eq!(
-            claude_boundary(&transcript, "Second prompt").unwrap(),
-            ("x1".into(), "p2".into())
-        );
-        // The local message must be the one Claude stored last.
-        assert!(claude_boundary(&transcript, "First").is_err());
-        let first = claude_line("p1", None, "user", json!("First"));
-        assert!(claude_boundary(&first, "First")
-            .unwrap_err()
-            .contains("first message"));
-        assert!(claude_boundary("", "First").is_err());
+        let at = |expected, later, from| claude_boundary(&transcript, expected, later, from);
+        assert_eq!(at("Third", 0, None).unwrap().as_deref(), Some("i2"));
+        assert_eq!(at("Second prompt", 1, None).unwrap().as_deref(), Some("x1"));
+        // Nothing precedes the first prompt, so no history survives the cut.
+        assert_eq!(at("First", 2, None).unwrap(), None);
+        // A pending rewind at `x1` already ends the chain before `p2`.
+        assert_eq!(at("First", 0, Some("x1")).unwrap(), None);
+        // Counting from the end must land on the message being cut.
+        assert!(at("First", 1, None).is_err());
+        assert!(at("First", 3, None).is_err());
+        assert!(claude_boundary("", "First", 0, None).is_err());
     }
     #[test]
     fn claude_binding_carries_a_pending_rewind_until_the_fork_replaces_it() {
         assert_eq!(claude_resume("session"), ("session", None));
         assert_eq!(
+            claude_resume("session?at=before"),
+            ("session", Some("before"))
+        );
+        assert_eq!(
             claude_resume("session?at=before&drops=prompt"),
-            ("session", Some(("before", "prompt")))
+            ("session", Some("before"))
         );
         let args = |binding| {
             let mut command = Command::new("claude");
@@ -593,27 +608,25 @@ mod tests {
         };
         assert_eq!(args("session"), ["--resume", "session"]);
         assert_eq!(
-            args("session?at=before&drops=prompt"),
+            args("session?at=before"),
             [
                 "--resume",
                 "session",
                 "--resume-session-at",
                 "before",
-                "--resume-drops-turn",
-                "prompt",
                 "--fork-session"
             ]
         );
     }
     #[test]
-    fn pi_fork_uses_the_last_valid_user_entry_and_rejects_missing_entries() {
-        assert_eq!(
-            last_fork_entry(&json!({"messages":[{"entryId":"first"},{"entryId":"last"},{}]}))
-                .unwrap(),
-            "last"
-        );
-        assert!(last_fork_entry(&json!({"messages":[]})).is_err());
-        assert!(last_fork_entry(&json!([])).is_err());
+    fn pi_fork_entry_counts_back_from_the_last_prompt_and_checks_its_text() {
+        let messages = json!({"messages":[
+            {"entryId":"e1","text":"First"},{"entryId":"e2","text":"Second"},{"text":"No entry"}]});
+        assert_eq!(fork_entry(&messages, "Second", 0).unwrap(), "e2");
+        assert_eq!(fork_entry(&messages, "First", 1).unwrap(), "e1");
+        assert!(fork_entry(&messages, "Second", 1).is_err());
+        assert!(fork_entry(&messages, "First", 2).is_err());
+        assert!(fork_entry(&json!([]), "First", 0).is_err());
     }
     #[test]
     fn pi_binding_never_persists_a_session_file_as_an_id() {

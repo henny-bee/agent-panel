@@ -40,7 +40,7 @@ impl Store {
         &self,
         id: i64,
         expected: &[Row],
-        turn_id: Option<&str>,
+        at: usize,
     ) -> Result<EditSnapshot, String> {
         self.shared_writable()?;
         self.edit_queue_empty(id)?;
@@ -50,7 +50,7 @@ impl Store {
             .find(|s| s.id == id)
             .ok_or("Conversation no longer exists")?;
         if !crate::provider::supports_rewind(crate::provider::Kind::from_id(&session.provider)) {
-            return Err("This provider does not support editing the last turn".into());
+            return Err("This provider does not support rewinding".into());
         }
         let blocks = self.shared_blocks(id)?;
         if self
@@ -64,10 +64,21 @@ impl Store {
         if rows != expected {
             return Err("Conversation changed; reopen it before editing".into());
         }
-        let latest = blocks
-            .iter()
-            .rposition(|b| b["role"] == "user" && b["internal"] != true && b["draft"] != true)
-            .ok_or("No user message to edit")?;
+        // The user block whose first projected row is `at`.
+        let mut offset = 0;
+        let mut latest = None;
+        for (index, block) in blocks.iter().enumerate() {
+            if offset == at
+                && block["role"] == "user"
+                && block["internal"] != true
+                && block["draft"] != true
+            {
+                latest = Some(index);
+                break;
+            }
+            offset += blocks::project(std::slice::from_ref(block))?.len();
+        }
+        let latest = latest.ok_or("No user message to edit")?;
         let block = &blocks[latest];
         if ["secondOpinion", "noteCard", "ciContext"]
             .iter()
@@ -75,12 +86,12 @@ impl Store {
         {
             return Err("This contextual user message cannot be edited".into());
         }
+        let settings = self.agent_settings(id)?.unwrap_or_default();
         let provider_turn_id = block["providerTurnId"]
             .as_str()
-            .or(turn_id)
             .filter(|id| !id.trim().is_empty())
-            .map(str::to_owned);
-        let settings = self.agent_settings(id)?.unwrap_or_default();
+            .map(str::to_owned)
+            .or_else(|| super::super::edit::turn_id_after(&rows, &settings, at));
         let mut first = latest;
         if session.provider == "codex" {
             let exact = provider_turn_id
@@ -112,16 +123,9 @@ impl Store {
                         }
                         offset += blocks::project(std::slice::from_ref(candidate))?.len();
                     }
-                } else if blocks
-                    .iter()
-                    .filter(|block| {
-                        block["role"] == "user"
-                            && block["internal"] != true
-                            && block["draft"] != true
-                    })
-                    .count()
-                    > 1
-                {
+                } else if blocks[..latest].iter().any(|block| {
+                    block["role"] == "user" && block["internal"] != true && block["draft"] != true
+                }) {
                     return Err(
                         "Codex user-turn boundaries are unavailable; history was preserved".into(),
                     );
@@ -168,11 +172,11 @@ impl Store {
         &self,
         id: i64,
         edit: &EditSnapshot,
-        provider_id: &str,
+        provider_id: Option<&str>,
     ) -> Result<(), String> {
         self.shared_writable()?;
         let tx = sql(self.conn.unchecked_transaction())?;
-        self.validate_edit_last_turn(id, edit)?;
+        self.validate_edit(id, edit)?;
         let blocks = edit
             .blocks
             .as_ref()
@@ -214,6 +218,12 @@ impl Store {
 mod tests {
     use super::*;
 
+    fn last_user(rows: &[Row]) -> usize {
+        rows.iter()
+            .rposition(|r| r.first && r.role == "user")
+            .unwrap()
+    }
+
     fn fixture(blocks: Value) -> (Store, i64) {
         let store = Store::open_monocode(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();
@@ -237,7 +247,7 @@ mod tests {
         ]);
         let (mut store, id) = fixture(blocks.clone());
         let rows = store.load(id).unwrap().rows;
-        let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let edit = store.prepare_edit(id, &rows, last_user(&rows)).unwrap();
         assert_eq!(edit.start, 2);
         assert_eq!(edit.prompt, "Edited follow-up");
         assert_eq!(edit.attachments, vec![PathBuf::from("/tmp/image.png")]);
@@ -245,7 +255,7 @@ mod tests {
             store.shared_blocks(id).unwrap(),
             blocks.as_array().unwrap().to_vec()
         );
-        store.finish_edit_last_turn(id, &edit, "thread").unwrap();
+        store.finish_edit(id, &edit, Some("thread")).unwrap();
         assert_eq!(
             store.shared_blocks(id).unwrap(),
             blocks.as_array().unwrap()[..3]
@@ -263,11 +273,11 @@ mod tests {
             {"id":"answer","role":"assistant","text":"Answer","future":"first"}
         ]));
         let rows = store.load(id).unwrap().rows;
-        let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let edit = store.prepare_edit(id, &rows, last_user(&rows)).unwrap();
         let mut newer = store.shared_blocks(id).unwrap();
         newer[1]["future"] = json!("another window");
         store.shared_store_blocks(id, &newer).unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit(id, &edit, Some("fork")).is_err());
         assert_eq!(store.shared_blocks(id).unwrap(), newer);
         assert_eq!(
             store.sessions().unwrap()[0].provider_id.as_deref(),
@@ -284,7 +294,7 @@ mod tests {
         ] {
             let (store, id) = fixture(blocks.clone());
             let rows = store.load(id).unwrap().rows;
-            assert!(store.prepare_edit_last_turn(id, &rows, None).is_err());
+            assert!(store.prepare_edit(id, &rows, last_user(&rows)).is_err());
             assert_eq!(
                 store.shared_blocks(id).unwrap(),
                 blocks.as_array().unwrap().to_vec()
@@ -296,7 +306,7 @@ mod tests {
         let (mut store, id) =
             fixture(json!([{"role":"user","id":"u","text":"Prompt","providerTurnId":"turn"}]));
         let rows = store.load(id).unwrap().rows;
-        let edit = store.prepare_edit_last_turn(id, &rows, None).unwrap();
+        let edit = store.prepare_edit(id, &rows, last_user(&rows)).unwrap();
         let queue = crate::session::follow_up::State {
             revision: 1,
             messages: vec![crate::session::follow_up::Message {
@@ -307,7 +317,7 @@ mod tests {
             ..Default::default()
         };
         store.save_follow_ups(id, &queue).unwrap();
-        assert!(store.finish_edit_last_turn(id, &edit, "fork").is_err());
+        assert!(store.finish_edit(id, &edit, Some("fork")).is_err());
         assert_eq!(store.load(id).unwrap().rows, rows);
         assert_eq!(
             store.follow_ups(id).unwrap().messages[0].text,

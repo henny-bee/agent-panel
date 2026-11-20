@@ -159,7 +159,7 @@ impl Store {
     /// Preference-only updates for validated operations which already preserve
     /// their source transcript inside a surrounding transaction (rewind and
     /// worktree cleanup). These must not re-save or re-index turn receipts.
-    pub(super) fn shared_save_agent_preferences(
+    pub(in crate::store) fn shared_save_agent_preferences(
         &self,
         id: i64,
         settings: &Settings,

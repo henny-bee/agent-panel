@@ -264,11 +264,7 @@ impl Client {
                     if directory.is_some_and(|directory| {
                         normalize_directory(directory) != normalize_directory(&self.directory)
                     }) {
-                        let fork = match self.request(
-                            "POST",
-                            &self.path(&format!("/session/{}/fork", encode(id))),
-                            Some(json!({})),
-                        ) {
+                        resolved = match self.fork(id, None) {
                             Err(error)
                                 if error.contains("HTTP 404")
                                     || error.contains("empty_session") =>
@@ -277,10 +273,6 @@ impl Client {
                             }
                             result => result?,
                         };
-                        resolved = fork["id"]
-                            .as_str()
-                            .ok_or("OpenCode fork returned no session id")?
-                            .into();
                         if self.v2 {
                             let moved = self
                                 .request(
@@ -343,6 +335,24 @@ impl Client {
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| "OpenCode returned no session id".into())
+    }
+    /// Creates a session holding the history before message `before`, or all
+    /// of it, and returns its id. The source session is left as it was.
+    pub fn fork(&self, session: &str, before: Option<&str>) -> Result<String, String> {
+        let body = match before {
+            Some(id) if self.v2 => json!({"before":id}),
+            Some(id) => json!({"messageID":id}),
+            None => json!({}),
+        };
+        let fork = self.request(
+            "POST",
+            &self.path(&format!("/session/{}/fork", encode(session))),
+            Some(body),
+        )?;
+        fork["id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "OpenCode fork returned no session id".into())
     }
     pub fn revert(&self, session: &str, message: &str) -> Result<(), String> {
         let base = format!("/session/{}", encode(session));

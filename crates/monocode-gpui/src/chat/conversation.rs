@@ -141,6 +141,13 @@ pub(crate) struct SessionLeft(pub(crate) Session);
 pub(crate) struct ChooseFolder(pub(crate) AnchorSlot);
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git::review::ReviewTab);
+/// A fork of this conversation to open in a tab, with the message it was cut
+/// at (and that message's attachments) waiting in its composer.
+pub(crate) struct Forked(
+    pub(crate) Session,
+    pub(crate) String,
+    pub(crate) Vec<std::path::PathBuf>,
+);
 pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
     btw: Option<Entity<btw::Btw>>,
@@ -287,6 +294,7 @@ impl EventEmitter<SessionChanged> for Conversation {}
 impl EventEmitter<SessionLeft> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
+impl EventEmitter<Forked> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
 impl EventEmitter<composer_features::StopOrchestration> for Conversation {}

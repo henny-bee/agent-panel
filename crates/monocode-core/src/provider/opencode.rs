@@ -703,54 +703,63 @@ fn catalog_row(id: &str, row: &Value, provider: Option<&str>, agents: &[Value]) 
         .unwrap_or_else(|| name.into());
     json!({"modelId":id,"name":name,"configOptions":config})
 }
+/// Copies the session up to the prompt sent at `sent_at` into a new OpenCode
+/// session and returns its id. OpenCode's revert would also restore files, so
+/// the cut is a fork, which leaves the source session and the disk alone.
 pub(super) fn rewind(
     request: &Request,
-    _before_turn: Option<&str>,
-) -> Result<String, rewind::RewindError> {
+    sent_at: Option<u64>,
+) -> Result<Option<String>, rewind::RewindError> {
     let cancel = AtomicBool::new(false);
     let session = request
         .provider_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
         .ok_or("The conversation has no saved provider session to rewind")?;
-    // Retire every warm launch configuration for this binding before changing
-    // durable history, including a process parked with an older model.
-    forget_session(session, &request.settings.account.id, &request.cwd);
+    let sent_at = sent_at.ok_or("This message has no send time to find it in OpenCode")?;
     let v2 = generation(request, &cancel)?;
-    let (client, server) = connect(request, &cancel, v2)?;
+    let (client, _server) = connect(request, &cancel, v2)?;
     let messages = client.request(
         "GET",
         &client.path(&format!("/session/{}/message", client::encode(session))),
         None,
     )?;
-    let mut candidates: Vec<_> = messages
+    let before = first_prompt_since(&messages, sent_at);
+    Ok(Some(client.fork(session, before.as_deref())?))
+}
+
+/// The first OpenCode user message created at or after `sent_at`. The local
+/// prompt is saved before it is posted, so this is the message for that prompt,
+/// or for a later one when that prompt never reached OpenCode. None keeps the
+/// whole session. Text can't tell repeated prompts apart; send times can.
+// ponytail: a steered message saved locally after OpenCode accepted it would be
+// matched to the next prompt; record OpenCode's message ids if steering needs cuts.
+fn first_prompt_since(messages: &Value, sent_at: u64) -> Option<String> {
+    messages
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|row| {
-            let info = row.get("info").unwrap_or(row);
-            if info["role"] == "user" || info["type"] == "user" {
-                info["id"]
-                    .as_str()
-                    .map(|id| (id.to_owned(), info["time"]["created"].as_f64()))
-            } else {
-                None
-            }
-        })
-        .collect();
-    if candidates.iter().all(|(_, time)| time.is_some()) {
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        .map(|row| row.get("info").unwrap_or(row))
+        .filter(|info| info["role"] == "user" || info["type"] == "user")
+        .filter_map(|info| Some((info["time"]["created"].as_f64()?, info["id"].as_str()?)))
+        .filter(|(created, _)| *created >= sent_at as f64)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, id)| id.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_cut_forks_before_the_first_prompt_opencode_got_since_the_local_one() {
+        let messages = json!([
+            {"info":{"id":"m1","role":"user","time":{"created":100}}},
+            {"info":{"id":"a1","role":"assistant","time":{"created":150}}},
+            {"id":"m2","type":"user","time":{"created":300}},
+        ]);
+        assert_eq!(first_prompt_since(&messages, 50).as_deref(), Some("m1"));
+        // A prompt that never reached OpenCode cuts before the next one, or nothing.
+        assert_eq!(first_prompt_since(&messages, 200).as_deref(), Some("m2"));
+        assert_eq!(first_prompt_since(&messages, 400), None);
     }
-    let message = candidates
-        .last()
-        .map(|(id, _)| id)
-        .ok_or("OpenCode did not expose the last user message")?;
-    let result = client.revert(session, message);
-    result.map_err(|message| rewind::RewindError {
-        message,
-        provider_may_have_changed: true,
-    })?;
-    // A reverted history must never be resumed by the old warm generation.
-    drop(server);
-    Ok(session.into())
 }

@@ -629,6 +629,14 @@ impl Shell {
                 cx.notify();
             },
         ));
+        self.observations.push(cx.subscribe(
+            &view,
+            move |this, _, forked: &crate::chat::conversation::Forked, cx| {
+                if this.acts_for(id, cx) {
+                    this.open_fork(forked.0.clone(), forked.1.clone(), forked.2.clone(), cx)
+                }
+            },
+        ));
         self.observations.push(
             cx.subscribe(&view, move |this, _, transfer: &Transfer, cx| {
                 if this.acts_for(id, cx) {

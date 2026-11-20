@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat::response_actions::Cut;
 
 impl TranscriptView {
     /// The sent message's actions, under its bubble while it is hovered.
@@ -17,12 +18,16 @@ impl TranscriptView {
         let copied = self.copied.is_some_and(|id| id == start as u64);
         let sent_at = self.source[start].sent_at;
         let base = self.base;
-        let stamp_anchor = self
-            .action_anchors
-            .entry((start, "sent-at"))
-            .or_default()
-            .clone();
-        div()
+        let kind = monocode_core::provider::Kind::from_id(&self.provider);
+        // Only providers that can cut their own history get the cut actions.
+        let cuts = !self.mono
+            && !self.side_question
+            && start >= base
+            && monocode_core::provider::supports_rewind(kind);
+        let fork = cuts && monocode_core::provider::supports_fork(kind);
+        let running = self.streaming;
+        let busy = "Wait for the current reply to finish.";
+        let mut row = div()
             .id(("prompt-actions", start))
             .absolute()
             .top_full()
@@ -39,79 +44,133 @@ impl TranscriptView {
             }))
             .flex()
             .items_center()
-            .gap_1()
-            .child(
-                response_actions::button(
-                    start,
-                    "mono-copy-message",
-                    if copied { "Copied" } else { "Copy message" },
-                    if copied { "check" } else { "response-copy" },
-                    false,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    this.copied = Some(start as u64);
-                    cx.notify();
-                })),
+            .gap_1();
+        let mut tooltip = None;
+        if let Some(at) = sent_at {
+            let label = dates::full_stamp(at);
+            let anchor = self
+                .action_anchors
+                .entry((start, "sent-at"))
+                .or_default()
+                .clone();
+            row = row.child(
+                div()
+                    .id(("message-sent-at", start))
+                    .debug_selector(|| "message-sent-at".into())
+                    .mr_1()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(content(0.4))
+                    .aria_label(label.clone())
+                    .child(anchor.probe())
+                    .child(monocode_core::session::response::local_clock(at))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.action_hover(start, "sent-at", *hovered, cx)
+                    })),
+            );
+            if self.hovered_action == Some((start, "sent-at")) {
+                tooltip = Some((anchor, label, None));
+            }
+        }
+        // Claude Desktop's order: time, Fork, Rewind, Edit, Copy.
+        for (action, glyph, title, detail, cut, shown) in [
+            (
+                "fork",
+                "git-branch",
+                "Fork from here",
+                "Starts a new session from this point. This one stays as it is.",
+                Cut::Fork,
+                fork,
+            ),
+            (
+                "rewind",
+                "undo",
+                "Rewind to here",
+                "Takes this message and everything after it out of the conversation.",
+                Cut::Rewind,
+                cuts,
+            ),
+            (
+                "edit",
+                "pencil",
+                "Edit",
+                "Puts this in the message box. Sending it restarts from here.",
+                Cut::Edit,
+                cuts,
+            ),
+        ] {
+            if !shown {
+                continue;
+            }
+            let anchor = self
+                .action_anchors
+                .entry((start, action))
+                .or_default()
+                .clone();
+            row = row.child(
+                response_actions::button(start, action, title, glyph, false)
+                    .when(running, |d| d.opacity(0.4))
+                    .child(anchor.probe())
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        this.action_hover(start, action, *hovered, cx)
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.streaming {
+                            cx.emit(ResponseRequest::Cut {
+                                turn: start - base,
+                                cut,
+                            })
+                        }
+                    })),
+            );
+            if self.hovered_action == Some((start, action)) {
+                tooltip = Some((
+                    anchor,
+                    title.into(),
+                    Some(if running { busy } else { detail }),
+                ));
+            }
+        }
+        row = row.child(
+            response_actions::button(
+                start,
+                "mono-copy-message",
+                if copied { "Copied" } else { "Copy message" },
+                if copied { "check" } else { "response-copy" },
+                false,
             )
-            .when(
-                !self.mono
-                    && !self.side_question
-                    && !self.streaming
-                    && monocode_core::provider::supports_rewind(
-                        monocode_core::provider::Kind::from_id(&self.provider),
-                    )
-                    && start >= base
-                    && self
-                        .source
-                        .iter()
-                        .rposition(|row| row.first && row.role == "user")
-                        == Some(start),
-                |d| {
-                    d.child(
-                        response_actions::button(
-                            start,
-                            "edit-last-message",
-                            "Edit last message",
-                            "pencil",
-                            false,
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(ResponseRequest::EditLastTurn { turn: start - base })
-                        })),
-                    )
-                },
-            )
-            .when_some(sent_at, |d, at| {
-                let label = dates::full_stamp(at);
-                d.child(
-                    div()
-                        .id(("message-sent-at", start))
-                        .debug_selector(|| "message-sent-at".into())
-                        .ml_1()
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .text_color(content(0.4))
-                        .aria_label(label.clone())
-                        .child(stamp_anchor.probe())
-                        .child(monocode_core::session::response::local_clock(at))
-                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                            this.action_hover(start, "sent-at", *hovered, cx)
-                        })),
-                )
-                .when(self.hovered_action == Some((start, "sent-at")), |d| {
-                    d.child(
-                        popover(
-                            ("message-time-tooltip", start),
-                            Anchor::Slot(stamp_anchor.clone()),
-                        )
-                        .side(Side::Top)
-                        .padding(8.)
-                        .child(div().text_size(px(12.)).child(label)),
-                    )
-                })
-            })
-            .into_any_element()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                this.copied = Some(start as u64);
+                cx.notify();
+            })),
+        );
+        if let Some((anchor, title, detail)) = tooltip {
+            row = row.child(
+                popover(("message-action-tooltip", start), Anchor::Slot(anchor))
+                    .side(Side::Top)
+                    .max_width(240.)
+                    .padding(8.)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(content(1.))
+                            .child(title)
+                            .when_some(detail, |d, detail| {
+                                d.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(content(0.5))
+                                        .child(detail),
+                                )
+                            }),
+                    ),
+            );
+        }
+        row.into_any_element()
     }
 
     /// The first row of the prompt block that opens `turn`.
@@ -349,8 +408,10 @@ impl TranscriptView {
                     .child(format!("Could not save note. {error}")),
             );
         }
+        // Prompt actions share these maps, keyed by row rather than turn.
         if let Some((hover_turn, action)) = self.hovered_action
             && hover_turn == turn
+            && matches!(action, "copy" | "note" | "handoff" | "opinion" | "metrics")
         {
             let (headline, detail) = match action {
                 "copy" => (if copied { "Copied" } else { "Copy response" }.into(), None),
