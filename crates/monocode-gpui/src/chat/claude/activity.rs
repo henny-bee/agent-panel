@@ -257,8 +257,12 @@ impl Tracker {
                 })
                 .collect(),
             context_used: self.main.used,
-            // ponytail: the CLI does not record the window; past 200K it must be 1M.
-            context_window: if wide || self.main.peak > 200_000 {
+            // The CLI does not record the window: go by the model it ran, and
+            // past 200K it must be 1M.
+            context_window: if wide
+                || names::wide_by_default(&self.main.model)
+                || self.main.peak > 200_000
+            {
                 1_000_000
             } else {
                 200_000

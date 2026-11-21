@@ -57,6 +57,22 @@ fn names_models_servers_and_steps() {
     assert_eq!(model_name("claude-opus-5-5"), "Opus 5.5");
     assert_eq!(model_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
     assert_eq!(model_name("claude-fable-5"), "Fable 5");
+    for wide in [
+        "claude-opus-5-5",
+        "claude-fable-5",
+        "claude-haiku-5-5",
+        "claude-sonnet-5",
+    ] {
+        assert!(super::names::wide_by_default(wide), "{wide}");
+    }
+    for narrow in [
+        "claude-opus-4-8",
+        "claude-haiku-4-5-20251001",
+        "claude-3-5-sonnet-20241022",
+        "",
+    ] {
+        assert!(!super::names::wide_by_default(narrow), "{narrow}");
+    }
     assert_eq!(server_name("claude_ai_Google_Calendar"), "Google Calendar");
     assert_eq!(
         server_name("plugin_antislop_antislop-contrast"),
@@ -216,11 +232,11 @@ fn follows_background_work_until_it_ends_and_the_context_it_fills() {
         running(&tracker, at("2026-11-17T10:00:30.000Z")),
         ["Bash npm run build", "Monitor tail -f log"]
     );
-    // The context is the last reply's; a compaction shrinks it.
+    // The context is the last reply's; a compaction shrinks it. Opus 5.5 has 1M.
     let snapshot = tracker.snapshot(&account, 0, false);
     assert_eq!(
         (snapshot.context_used, snapshot.context_window),
-        (19, 200_000)
+        (19, 1_000_000)
     );
     feed(
         &mut tracker.main,
