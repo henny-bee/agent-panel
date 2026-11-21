@@ -68,18 +68,17 @@ impl Shell {
         let Some(panel) = &self.right_panel else {
             return div().into_any_element();
         };
-        let panel = panel.read(cx);
         match self.classic_sidebar_tab {
             sidebar::classic::ClassicSidebarTab::Files => panel
+                .read(cx)
                 .explorer
                 .clone()
                 .cached(StyleRefinement::default().size_full())
                 .into_any_element(),
-            sidebar::classic::ClassicSidebarTab::Changes => panel
-                .changes
-                .clone()
-                .cached(StyleRefinement::default().size_full())
-                .into_any_element(),
+            // The same Changes + Graph split the right panel draws.
+            sidebar::classic::ClassicSidebarTab::Changes => {
+                panel.update(cx, |panel, cx| panel.changes_split(cx))
+            }
             sidebar::classic::ClassicSidebarTab::Sessions => div().into_any_element(),
         }
     }
