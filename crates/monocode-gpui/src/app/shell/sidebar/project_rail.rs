@@ -160,8 +160,9 @@ impl Shell {
         }
     }
     pub(crate) fn left_sidebar_width(&self, cx: &App) -> f32 {
+        // The classic workspace sidebar sits on the right (`right_sidebar_width`).
         self.project_rail_drawn_width()
-            + if !self.session_sidebar_available(cx) {
+            + if self.workspace.classic_layout || !self.session_sidebar_available(cx) {
                 0.
             } else {
                 self.workspace.sidebar_width * self.sidebar_fraction

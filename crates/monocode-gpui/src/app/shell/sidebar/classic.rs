@@ -319,7 +319,9 @@ impl Shell {
                             .relative()
                             .h_full()
                             .pl_3()
-                            .pr_1p5()
+                            // It holds the window's right corner, under
+                            // Windows' controls.
+                            .pr(px(6. + self.window_controls))
                             .flex()
                             .items_center()
                             .gap_1()

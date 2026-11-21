@@ -176,7 +176,7 @@ fn original_sidebar_geometry_matches_tauri_chrome(cx: &mut TestAppContext) {
     assert_eq!(sidebar.size.width, px(260.));
     assert_eq!(projects.top(), px(0.));
     assert_eq!(sidebar.top(), px(0.));
-    assert_eq!(sidebar.left(), projects.right());
+    assert_eq!(sidebar.right(), px(1500.));
     assert_eq!(header.top(), sidebar.top());
     assert_eq!(header.size.height, px(40.));
     assert_eq!(tabs.top(), header.bottom());
@@ -187,10 +187,24 @@ fn original_sidebar_geometry_matches_tauri_chrome(cx: &mut TestAppContext) {
         visual.debug_bounds("sidebar-sessions").unwrap().top(),
         search.bottom()
     );
+    let main = visual.debug_bounds("main-pane-frame").unwrap();
+    assert_eq!(main.left(), projects.right());
+    assert_eq!(main.right(), sidebar.left());
+
+    // The corner button beside it hides the sidebar and brings it back.
+    let button = visual.debug_bounds("toggle-right-panel").unwrap();
+    assert!(button.right() <= sidebar.left());
+    visual.simulate_click(button.center(), Default::default());
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("sidebar-frame").is_none());
     assert_eq!(
-        visual.debug_bounds("main-pane-frame").unwrap().left(),
-        sidebar.right()
+        visual.debug_bounds("main-pane-frame").unwrap().right(),
+        px(1500.)
     );
+    let button = visual.debug_bounds("toggle-right-panel").unwrap();
+    visual.simulate_click(button.center(), Default::default());
+    visual.run_until_parked();
+    assert_eq!(visual.debug_bounds("sidebar-frame").unwrap(), sidebar);
 
     let back = visual.debug_bounds("visit-back").unwrap();
     let forward = visual.debug_bounds("visit-forward").unwrap();
@@ -282,7 +296,7 @@ fn original_sidebar_compact_rail_uses_vertical_workspace_tabs(cx: &mut TestAppCo
     let sidebar = visual.debug_bounds("sidebar-frame").unwrap();
     let header = visual.debug_bounds("classic-workspace-header").unwrap();
     assert_eq!(projects.size.width, px(48.));
-    assert_eq!(sidebar.left(), projects.right());
+    assert_eq!(sidebar.right(), px(1500.));
     assert_eq!(sidebar.size.width, px(260.));
     assert!(visual.debug_bounds("classic-workspace-tabs").is_none());
     assert!(visual.debug_bounds("rail-workspace-sessions").is_some());

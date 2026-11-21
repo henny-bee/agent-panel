@@ -681,7 +681,13 @@ impl Render for Shell {
                 }
                 if let Some((start, width)) = this.resize {
                     if event.pressed_button == Some(MouseButton::Left) {
-                        let width = width + (event.position.x - start).as_f32();
+                        let moved = (event.position.x - start).as_f32();
+                        // The classic sidebar sits on the right: dragging left widens it.
+                        let width = if this.workspace.classic_layout {
+                            width - moved
+                        } else {
+                            width + moved
+                        };
                         this.drag_resize(ResizeTarget::Sidebar, width, cx);
                     } else {
                         this.release_resizes(cx);
