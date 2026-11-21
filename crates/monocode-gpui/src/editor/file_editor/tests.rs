@@ -197,6 +197,56 @@ fn remembered_preview_mode_keeps_focus_and_find_switches_to_source(cx: &mut Test
     }
 }
 
+#[test]
+fn html_files_are_named_by_their_extension() {
+    assert!(is_html_path(r"C:\out\Report.HTM"));
+    assert!(is_html_path("/tmp/page.html"));
+    assert!(!is_html_path("/tmp/page.html.md"));
+    assert!(!is_html_path("/tmp/html"));
+}
+
+#[gpui::test]
+fn html_opens_rendered_and_reloads_when_the_file_changes(cx: &mut TestAppContext) {
+    let path = std::env::temp_dir().join(format!("monocode-page-{}.html", std::process::id()));
+    std::fs::write(&path, "<p>One</p>").unwrap();
+    let file = path.to_string_lossy().into_owned();
+    let window = cx.update(|cx| {
+        // Markdown last used Source; a page still opens rendered.
+        cx.set_global(crate::ui::preferences::Preferences {
+            file_view_mode: "source".into(),
+            ..Default::default()
+        });
+        input::bind(cx);
+        bind(cx);
+        cx.open_window(Default::default(), |_, cx| {
+            let git = cx.new(|cx| ProjectGit::new("/tmp".into(), cx));
+            cx.new(|cx| FileEditor::new(file, git, cx))
+        })
+        .unwrap()
+    });
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+    cx.run_until_parked();
+    let rendered = cfg!(any(target_os = "macos", windows));
+    window
+        .update(cx, |e, _, _| {
+            assert_eq!(e.preview, rendered);
+            assert_eq!(e.html.is_some(), rendered);
+        })
+        .unwrap();
+    std::fs::write(&path, "<p>Two</p>").unwrap();
+    window.update(cx, |e, _, cx| e.load(false, cx)).unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |e, _, cx| {
+            assert_eq!(e.input.read(cx).content.to_string(), "<p>Two</p>");
+            if let Some(html) = &e.html {
+                assert_eq!(html.read(cx).reloads(), 1);
+            }
+        })
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
 #[gpui::test]
 fn editor_load_find_save_and_external_edits_preserve_the_draft(cx: &mut TestAppContext) {
     let path = std::env::temp_dir().join(format!("monocode-editor-{}.rs", std::process::id()));

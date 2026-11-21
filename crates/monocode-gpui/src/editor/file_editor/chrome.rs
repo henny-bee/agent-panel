@@ -124,6 +124,43 @@ impl FileEditor {
             .into_any_element()
     }
 
+    /// Reload for a rendered page, and Open in Browser for any HTML file.
+    pub(super) fn page_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let control = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .role(Role::Button)
+                .aria_label(label)
+                .cursor_pointer()
+                .flex_shrink_0()
+                .h(px(CONTROL_HEIGHT))
+                .px_2()
+                .flex()
+                .items_center()
+                .rounded_md()
+                .text_size(px(11.))
+                .line_height(px(14.))
+                .text_color(content(0.45))
+                .hover(|s| s.bg(content(0.1)).text_color(content(1.)))
+                .child(label)
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .when(self.preview && self.previews_html(), |d| {
+                d.child(
+                    control("file-page-reload", "Reload")
+                        .on_click(cx.listener(|this, _, _, cx| this.reload_page(cx))),
+                )
+            })
+            .child(
+                control("file-page-browser", "Open in Browser")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_in_browser(cx))),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn view_mode_control(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("file-mode")

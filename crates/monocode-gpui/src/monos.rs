@@ -9,7 +9,6 @@ mod files;
 mod filters;
 mod floating;
 mod host;
-mod html;
 mod memory_ui;
 mod mobile;
 mod notifications;
@@ -139,7 +138,7 @@ pub(crate) struct Monos {
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
     menu_anchor: Anchor,
     documents: HashMap<String, Entity<crate::chat::transcript::TranscriptView>>,
-    html_documents: HashMap<String, Entity<html::Html>>,
+    html_documents: HashMap<String, Entity<crate::ui::html::Html>>,
     /// Native visuals the Mono published in its chat, opened as documents.
     visual_documents: HashMap<String, Entity<crate::chat::visuals::VisualView>>,
     project_changes: changes::ProjectChanges,
@@ -253,11 +252,6 @@ impl Monos {
             if let Some(status) = &mut self.status {
                 status.update(&monos, run);
             }
-        }
-    }
-    pub(crate) fn hide_html(&self, cx: &App) {
-        for view in self.html_documents.values() {
-            view.read(cx).hide();
         }
     }
     pub(crate) fn sidebar_preferences(

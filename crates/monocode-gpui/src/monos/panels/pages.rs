@@ -556,7 +556,7 @@ impl Monos {
                         .html_documents
                         .entry(id.clone())
                         .or_insert_with(|| {
-                            cx.new(|_| super::super::html::Html::new(document.body.clone()))
+                            cx.new(|_| crate::ui::html::Html::new(document.body.clone()))
                         })
                         .clone();
                     html.update(cx, |html, _| html.set_interactive(interactive));

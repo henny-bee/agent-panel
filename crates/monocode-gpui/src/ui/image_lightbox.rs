@@ -475,6 +475,7 @@ pub(crate) fn overlay(view: &Entity<ImageLightbox>) -> impl IntoElement {
             .top_0()
             .left_0()
             .size_full()
+            .child(crate::ui::html::cover())
             .child(view.clone()),
     )
     .with_priority(100)

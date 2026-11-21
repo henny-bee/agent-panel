@@ -22,7 +22,6 @@ impl Render for Shell {
             window.focus(&view.read(cx).session_focus(cx), cx);
         }
         if let Some(m) = &self.monos {
-            m.read(cx).hide_html(cx);
             m.update(cx, |m, cx| m.bind_window(window, cx));
         }
         self.render_passes += 1;
@@ -759,6 +758,7 @@ impl Render for Shell {
                     .as_ref()
                     .map(|(view, _)| crate::ui::image_lightbox::overlay(view)),
             )
+            .child(crate::ui::html::end_frame())
             .map(|root| {
                 #[cfg(target_os = "linux")]
                 let caption = self.client_decorations;

@@ -35,6 +35,39 @@ impl FileEditor {
                 }));
             }
         }
+        // The page shows the file on disk, so each new version, and each
+        // return from Source, reloads it.
+        if self.preview && self.previews_html() {
+            match &self.html {
+                Some(html) => html.update(cx, |html, cx| html.reload(cx)),
+                None => {
+                    let path = PathBuf::from(&self.path);
+                    self.html = Some(cx.new(|_| crate::ui::html::Html::file(path)));
+                }
+            }
+        }
+    }
+
+    pub(super) fn reload_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(html) = &self.html {
+            html.update(cx, |html, cx| html.reload(cx));
+        }
+    }
+
+    pub(super) fn open_in_browser(&mut self, cx: &mut Context<Self>) {
+        let path = PathBuf::from(&self.path);
+        let work = cx
+            .background_executor()
+            .spawn(async move { monocode_core::files::open_path_with_default_app(&path) });
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = work.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(format!("Couldn’t open the page in a browser: {error}"));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     pub(super) fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -61,9 +94,11 @@ impl gpui::Render for FileEditor {
                 .items_center()
                 .gap_1p5()
                 .when(!self.preview, |d| d.child(self.word_wrap_control(cx)))
-                .when(self.is_markdown() || self.is_svg(), |d| {
-                    d.child(self.view_mode_control(cx))
-                })
+                .when(self.is_html(), |d| d.child(self.page_controls(cx)))
+                .when(
+                    self.is_markdown() || self.is_svg() || self.previews_html(),
+                    |d| d.child(self.view_mode_control(cx)),
+                )
                 .into_any_element()
         });
         let selection_menu = self.code_selection_menu(window, cx);
@@ -114,9 +149,10 @@ impl gpui::Render for FileEditor {
                 .into_any_element()
         } else if ready {
             if self.preview {
-                self.markdown
+                self.html
                     .clone()
-                    .map(|m| m.into_any_element())
+                    .map(|h| h.into_any_element())
+                    .or_else(|| self.markdown.clone().map(|m| m.into_any_element()))
                     .unwrap_or_else(|| div().into_any_element())
             } else {
                 self.input.clone().into_any_element()

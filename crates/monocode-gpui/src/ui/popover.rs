@@ -415,6 +415,7 @@ impl Popover {
             .rounded(px(radius))
             .opacity(enter)
             .shadow(shadow())
+            .child(crate::ui::html::cover())
             .child(glass(tint, radius))
             .child(
                 div()

@@ -45,7 +45,10 @@ pub(crate) fn backdrop<E: Styled + IntoElement + 'static>(
 /// A full-window scrim layer, for a modal parent that is already
 /// `absolute().inset_0()`. Add it before the card so the card paints above.
 pub(crate) fn scrim(id: impl Into<ElementId>) -> AnimationElement<Div> {
-    backdrop(id, div().absolute().inset_0())
+    backdrop(
+        id,
+        div().absolute().inset_0().child(crate::ui::html::cover()),
+    )
 }
 
 /// Lifts a modal overlay out of the pane that renders it, so its scrim covers
@@ -238,6 +241,7 @@ pub(crate) fn overlay(
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 on_dismiss(window, cx)
             })
+            .child(crate::ui::html::cover())
             .child(enter(
                 SharedString::from(format!("{id}-card")),
                 div()

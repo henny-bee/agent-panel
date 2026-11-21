@@ -493,7 +493,6 @@ impl Monos {
 
 impl gpui::Render for Monos {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.hide_html(cx);
         let Some(mono) = self.current().cloned() else {
             return div().into_any_element();
         };

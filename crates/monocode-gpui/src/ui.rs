@@ -6,6 +6,7 @@ pub(crate) mod chrome;
 pub(crate) mod file_icons;
 pub(crate) mod files;
 pub(crate) mod fonts;
+pub(crate) mod html;
 pub(crate) mod image_lightbox;
 pub(crate) mod image_memory;
 pub(crate) mod input;

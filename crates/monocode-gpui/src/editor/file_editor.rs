@@ -70,6 +70,13 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 
+/// Whether a path names a web page: `C:\out\Report.HTM` -> true.
+fn is_html_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
+}
+
 pub(crate) enum FileEvent {
     Dirty,
     Saved,
@@ -125,6 +132,7 @@ pub(crate) struct FileEditor {
     preview: bool,
     markdown: Option<Entity<TranscriptView>>,
     markdown_source: SharedString,
+    html: Option<Entity<crate::ui::html::Html>>,
     navigation: Option<(usize, usize)>,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
@@ -270,6 +278,7 @@ impl FileEditor {
             preview: false,
             markdown: None,
             markdown_source: "".into(),
+            html: None,
             navigation: None,
             _subscriptions: subscriptions,
             _poll: poll,
@@ -318,6 +327,9 @@ impl FileEditor {
         if let Some(media) = &self.media {
             media.update(cx, |m, _| m.set_visible(visible));
         }
+        if !visible && let Some(html) = &self.html {
+            html.read(cx).hide();
+        }
         if visible && !was {
             self.load(false, cx);
             self.refresh_git(cx);
@@ -330,6 +342,16 @@ impl FileEditor {
                 .and_then(|s| s.to_str()),
             Some("md" | "mdx" | "markdown")
         )
+    }
+    fn is_html(&self) -> bool {
+        is_html_path(&self.path)
+    }
+    /// Whether the file renders in a native web view: macOS and Windows have
+    /// one, and only a local file can load from its folder.
+    fn previews_html(&self) -> bool {
+        cfg!(any(target_os = "macos", windows))
+            && self.is_html()
+            && !monocode_core::files::remote::is_remote(std::path::Path::new(&self.path))
     }
     fn load(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.loading || self.saving {
@@ -371,10 +393,15 @@ impl FileEditor {
                             input.reload_file(text, !first && !force, cx);
                         });
                         this.dirty = false;
-                        if first && !this.show_diff && (this.is_markdown() || this.is_svg()) {
-                            this.preview = cx
-                                .try_global::<crate::ui::preferences::Preferences>()
-                                .is_none_or(|prefs| prefs.file_view_mode != "source");
+                        if first
+                            && !this.show_diff
+                            && (this.is_markdown() || this.is_svg() || this.previews_html())
+                        {
+                            // A page opens rendered, whichever view Markdown last used.
+                            this.preview = this.previews_html()
+                                || cx
+                                    .try_global::<crate::ui::preferences::Preferences>()
+                                    .is_none_or(|prefs| prefs.file_view_mode != "source");
                         }
                         this.apply_navigation(cx);
                         this.update_preview(cx);

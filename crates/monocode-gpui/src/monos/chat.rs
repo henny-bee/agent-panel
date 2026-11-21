@@ -529,7 +529,6 @@ impl Monos {
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
         self.save_open_file(cx);
         self.pause_changes(cx);
-        self.hide_html(cx);
         self.remember_panel_view();
         if self.active.take().is_some() {
             self.details.update(cx, |details, cx| details.reset(cx));
