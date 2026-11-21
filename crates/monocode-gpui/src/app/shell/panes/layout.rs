@@ -107,6 +107,56 @@ fn card_corner_mask(begin: bool) -> impl IntoElement {
     .size_full()
 }
 
+impl Shell {
+    /// Original classic: whether the corner shows the workspace sidebar's toggle.
+    pub(crate) fn workspace_toggle_shown(&self, cx: &gpui::App) -> bool {
+        self.workspace.classic_layout
+            && self.settings.is_none()
+            && !self.mono_active(cx)
+            && self.session_sidebar_available(cx)
+    }
+
+    /// Original classic: the drawn width of the workspace sidebar on the right.
+    pub(crate) fn right_sidebar_width(&self, cx: &gpui::App) -> f32 {
+        if self.workspace.classic_layout && self.session_sidebar_available(cx) {
+            self.workspace.sidebar_width * self.sidebar_fraction
+        } else {
+            0.
+        }
+    }
+
+    /// Windows' controls hold the corner; an open right sidebar takes them
+    /// into its header.
+    fn uncovered_controls(&self, cx: &gpui::App) -> f32 {
+        (self.window_controls - self.right_sidebar_width(cx)).max(0.)
+    }
+
+    /// Original classic: the corner button that shows and hides the workspace
+    /// sidebar on the right.
+    fn workspace_toggle(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.workspace_toggle_shown(cx).then(|| {
+            div()
+                .h_full()
+                .flex()
+                .items_center()
+                .pl_1p5()
+                .pr(px(12. + self.uncovered_controls(cx)))
+                .child(
+                    panel_button(true, false)
+                        .aria_toggled(if self.workspace.sidebar_visible {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx)),
+                        ),
+                )
+                .into_any_element()
+        })
+    }
+}
+
 /// The right panel toggle: chrome_button's 24px square.
 fn panel_button(enabled: bool, dot: bool) -> gpui::Stateful<gpui::Div> {
     let id = "toggle-right-panel";
@@ -387,7 +437,71 @@ impl Shell {
         };
         let show_navigation = !spans_window;
         let navigation = show_navigation.then(|| self.navigation(cx));
-        let corner = (self.settings.is_none() && !original).then(|| self.panel_toggle(window, cx));
+        let corner = if original {
+            self.workspace_toggle(cx)
+        } else {
+            self.settings
+                .is_none()
+                .then(|| self.panel_toggle(window, cx))
+        };
+        // The original classic layout keeps the workspace sidebar on the right,
+        // after the main pane; the others keep it beside the window's left edge.
+        let sidebar = (sidebar_width > 0.).then(|| {
+            div()
+                .id("sidebar-frame")
+                .debug_selector(|| "sidebar-frame".into())
+                .relative()
+                .w(px(sidebar_width))
+                .h_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .when(original, |d| d.bg(pane_fill()))
+                .when(!original, |d| {
+                    d.border_r_1().border_color(crate::ui::panel::stroke())
+                })
+                .child(
+                    // Full width while it slides; the frame clips it.
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(self.workspace.sidebar_width))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .opacity(self.sidebar_fraction)
+                        .when(!original, |d| {
+                            d.child(
+                                // The traffic lights head the sidebar, where
+                                // the window's top is; the toggle floats
+                                // above them (see below).
+                                titlebar_drag_area()
+                                    .w_full()
+                                    .h(px(TITLE_BAR_HEIGHT))
+                                    .flex_shrink_0(),
+                            )
+                        })
+                        .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
+                )
+                .when(original, |d| {
+                    // Its left rule lies over the content, as a border would
+                    // shift the content past the frame's right edge.
+                    d.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(1.))
+                            .bg(content(0.07)),
+                    )
+                })
+        });
+        let (left_sidebar, right_sidebar) = if original {
+            (None, sidebar)
+        } else {
+            (sidebar, None)
+        };
         let body = div()
             .flex_1()
             .min_h_0()
@@ -396,49 +510,7 @@ impl Shell {
             .when(self.workspace.classic_layout, |d| {
                 d.child(self.project_rail_frame(cx))
             })
-            .when(sidebar_width > 0., |d| {
-                d.child(
-                    div()
-                        .id("sidebar-frame")
-                        .debug_selector(|| "sidebar-frame".into())
-                        .relative()
-                        .w(px(sidebar_width))
-                        .h_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .border_r_1()
-                        .border_color(if original {
-                            content(0.07)
-                        } else {
-                            crate::ui::panel::stroke()
-                        })
-                        .when(original, |d| d.bg(pane_fill()))
-                        .child(
-                            // Full width while it slides; the frame clips it.
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .w(px(self.workspace.sidebar_width))
-                                .h_full()
-                                .flex()
-                                .flex_col()
-                                .opacity(self.sidebar_fraction)
-                                .when(!original, |d| {
-                                    d.child(
-                                        // The traffic lights head the sidebar, where
-                                        // the window's top is; the toggle floats
-                                        // above them (see below).
-                                        titlebar_drag_area()
-                                            .w_full()
-                                            .h(px(TITLE_BAR_HEIGHT))
-                                            .flex_shrink_0(),
-                                    )
-                                })
-                                .child(div().flex_1().min_h_0().child(self.sidebar_contents())),
-                        ),
-                )
-            })
+            .children(left_sidebar)
             .child(
                 div()
                     .id("main-pane-frame")
@@ -473,8 +545,10 @@ impl Shell {
                             .border_color(crate::ui::panel::stroke())
                     })),
             )
-            .children(self.sidebar_resize(cx))
             .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
+            .children(right_sidebar)
+            // After the sidebar, so the handle on its edge stays on top.
+            .children(self.sidebar_resize(cx))
             .when(show_navigation, |d| {
                 d.child(
                     // The traffic lights, toggle and arrows ride above the sidebar's
@@ -491,9 +565,9 @@ impl Shell {
                     div()
                         .absolute()
                         .top_0()
-                        .right(px(
-                            crate::ui::chrome::client_controls_width(window) - self.window_controls
-                        ))
+                        .right(px(crate::ui::chrome::client_controls_width(window)
+                            - self.window_controls
+                            + if original { sidebar_width } else { 0. }))
                         .h(px(TITLE_BAR_HEIGHT))
                         .children(corner),
                 )
@@ -515,7 +589,13 @@ impl Shell {
         // Client-drawn window controls hold the corner's right end.
         let controls = self.window_controls;
         if self.workspace.classic_layout && !self.mono_active(cx) {
-            return controls;
+            // `pl-1.5`, the workspace toggle and `pr-3` beside the sidebar,
+            // or before the controls it no longer covers.
+            return if self.workspace_toggle_shown(cx) {
+                6. + 24. + 12. + self.uncovered_controls(cx)
+            } else {
+                controls
+            };
         }
         if self.mono_active(cx) {
             return if self.corner_tabs_shown() {
@@ -698,7 +778,14 @@ impl Shell {
             div()
                 .id("sidebar-resize")
                 .absolute()
-                .left(px(border - 2.))
+                .map(|d| {
+                    if self.workspace.classic_layout {
+                        // On the right: centred on the sidebar's left rule.
+                        d.right(px(self.workspace.sidebar_width - 2.5))
+                    } else {
+                        d.left(px(border - 2.))
+                    }
+                })
                 .w(px(4.))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)

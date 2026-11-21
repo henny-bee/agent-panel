@@ -15,8 +15,9 @@ fn original_layout_keeps_project_icons_when_sessions_are_hidden(cx: &mut TestApp
     let sessions = visual.debug_bounds("sidebar-frame").unwrap();
     let main = visual.debug_bounds("main-pane-frame").unwrap();
     assert_eq!(projects.left(), px(0.));
-    assert_eq!(sessions.left(), projects.right());
-    assert_eq!(main.left(), sessions.right());
+    // The workspace sidebar holds the window's right edge.
+    assert_eq!(main.left(), projects.right());
+    assert_eq!(sessions.left(), main.right());
     let grip = visual.debug_bounds("project-rail-resize").unwrap().center();
     let end = grip + gpui::point(px(28.), px(0.));
     visual.simulate_mouse_down(grip, MouseButton::Left, Default::default());

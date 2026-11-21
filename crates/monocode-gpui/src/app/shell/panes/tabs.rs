@@ -264,7 +264,7 @@ impl Shell {
     /// panel toggle, `pl-1.5 pr-3` clear of the edge.
     pub(in crate::app::shell) fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
         let trailing = if self.workspace.boxy_layout() {
-            self.right_drawn + self.strip_trail(cx)
+            self.right_drawn + self.strip_trail(cx) + self.right_sidebar_width(cx)
         } else {
             self.toggle_room(cx)
         };
