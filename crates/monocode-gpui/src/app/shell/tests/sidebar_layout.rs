@@ -250,6 +250,14 @@ fn original_sidebar_tools_replace_sessions_in_the_left_column(cx: &mut TestAppCo
         assert!(tool.right() <= sidebar.right());
         assert!(visual.debug_bounds("right-panel-frame").is_none());
         assert!(visual.debug_bounds("classic-conversation-search").is_none());
+        // Changes keeps focus mode's GRAPH | CODE section at its foot.
+        let graph = visual.debug_bounds("graph-tab");
+        assert_eq!(graph.is_some(), id == "changes");
+        if let Some(graph) = graph {
+            assert!(graph.top() > tool.bottom());
+            assert!(graph.left() > sidebar.left() && graph.right() < sidebar.right());
+            assert!(graph.bottom() <= sidebar.bottom());
+        }
         window
             .update(visual, |shell, _, _| {
                 assert_eq!(shell.classic_sidebar_tab.id(), id);
@@ -272,6 +280,7 @@ fn original_sidebar_tools_replace_sessions_in_the_left_column(cx: &mut TestAppCo
     assert!(visual.debug_bounds("classic-conversation-search").is_some());
     assert!(visual.debug_bounds("explorer-header").is_none());
     assert!(visual.debug_bounds("changes-header").is_none());
+    assert!(visual.debug_bounds("graph-tab").is_none());
 }
 
 #[gpui::test]
