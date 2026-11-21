@@ -78,6 +78,20 @@ pub(super) fn price(model: &str) -> Option<(f64, f64, f64)> {
     })
 }
 
+/// Claude 5 models and later run with a 1M window without asking; older ones
+/// have 200K unless picked with `[1m]`.
+pub(super) fn wide_by_default(model: &str) -> bool {
+    let mut parts = model.strip_prefix("claude-").unwrap_or(model).split('-');
+    // "claude-3-5-sonnet" puts the version first: an old model.
+    parts
+        .next()
+        .is_some_and(|family| !family.is_empty() && family.chars().all(|c| c.is_ascii_alphabetic()))
+        && parts
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .is_some_and(|major| major >= 5)
+}
+
 /// "claude-opus-5-5" reads "Opus 5.5"; a dated id drops its date.
 pub(crate) fn model_name(id: &str) -> String {
     let Some(rest) = id.strip_prefix("claude-") else {
