@@ -171,6 +171,7 @@ impl Shell {
             .flex_col()
             .items_end()
             .gap(px(8.))
+            .child(crate::ui::html::cover())
             .child(state.region.probe())
             .when_some(self.error.clone(), |stack, message| {
                 stack.child(errors::card(

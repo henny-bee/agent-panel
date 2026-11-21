@@ -213,7 +213,8 @@ impl Monos {
                                     .w(size.width)
                                     .h(size.height)
                                     .bg(gpui::black().opacity(0.4))
-                                    .occlude(),
+                                    .occlude()
+                                    .child(crate::ui::html::cover()),
                             ),
                     )
                     .with_priority(69),

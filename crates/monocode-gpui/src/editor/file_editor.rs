@@ -346,12 +346,14 @@ impl FileEditor {
     fn is_html(&self) -> bool {
         is_html_path(&self.path)
     }
+    /// Whether the file is a web page on this machine, which a browser can open.
+    fn is_local_html(&self) -> bool {
+        self.is_html() && !monocode_core::files::remote::is_remote(std::path::Path::new(&self.path))
+    }
     /// Whether the file renders in a native web view: macOS and Windows have
     /// one, and only a local file can load from its folder.
     fn previews_html(&self) -> bool {
-        cfg!(any(target_os = "macos", windows))
-            && self.is_html()
-            && !monocode_core::files::remote::is_remote(std::path::Path::new(&self.path))
+        cfg!(any(target_os = "macos", windows)) && self.is_local_html()
     }
     fn load(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.loading || self.saving {

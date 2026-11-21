@@ -473,7 +473,15 @@ impl WindowsWindowInner {
         button: MouseButton,
         lparam: LPARAM,
     ) -> Option<isize> {
-        unsafe { SetCapture(handle) };
+        unsafe {
+            SetCapture(handle);
+            // A child window, such as an HTML preview, keeps keyboard focus
+            // after a click outside it unless the window takes it back.
+            let focus = GetFocus();
+            if focus != handle && IsChild(handle, focus).as_bool() {
+                SetFocus(Some(handle)).log_err();
+            }
+        }
 
         let Some(mut func) = self.state.callbacks.input.take() else {
             return Some(1);

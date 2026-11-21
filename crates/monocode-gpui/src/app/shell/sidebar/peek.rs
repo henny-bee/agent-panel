@@ -251,7 +251,14 @@ impl Shell {
                 ));
         let mut dim: gpui::Hsla = rgba(0x000000ff).into();
         dim.a = if light { 0.18 } else { 0.4 } * progress;
-        div().absolute().top_0().left_0().size_full().bg(dim)
+        // Covers the whole window, so it hides HTML previews under the panel too.
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(dim)
+            .child(crate::ui::html::cover())
     }
 
     fn peek_panel(&self, progress: f32, window: &mut Window) -> gpui::Stateful<gpui::Div> {

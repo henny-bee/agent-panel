@@ -244,6 +244,16 @@ fn html_opens_rendered_and_reloads_when_the_file_changes(cx: &mut TestAppContext
             }
         })
         .unwrap();
+    // Switching the page's view leaves Markdown's remembered Source alone.
+    for _ in 0..2 {
+        window
+            .update(cx, |e, window, cx| e.toggle_preview(window, cx))
+            .unwrap();
+    }
+    cx.update(|_, cx| {
+        let prefs = cx.global::<crate::ui::preferences::Preferences>();
+        assert_eq!(prefs.file_view_mode, "source");
+    });
     std::fs::remove_file(path).unwrap();
 }
 

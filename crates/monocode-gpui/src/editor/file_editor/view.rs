@@ -42,7 +42,8 @@ impl FileEditor {
                 Some(html) => html.update(cx, |html, cx| html.reload(cx)),
                 None => {
                     let path = PathBuf::from(&self.path);
-                    self.html = Some(cx.new(|_| crate::ui::html::Html::file(path)));
+                    let root = PathBuf::from(&self.cwd);
+                    self.html = Some(cx.new(|_| crate::ui::html::Html::file(path, &root)));
                 }
             }
         }
@@ -58,7 +59,7 @@ impl FileEditor {
         let path = PathBuf::from(&self.path);
         let work = cx
             .background_executor()
-            .spawn(async move { monocode_core::files::open_path_with_default_app(&path) });
+            .spawn(async move { crate::ui::html::open_in_browser(&path) });
         cx.spawn(async move |this, cx| {
             if let Err(error) = work.await {
                 let _ = this.update(cx, |this, cx| {
@@ -73,7 +74,9 @@ impl FileEditor {
     pub(super) fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        if cx.has_global::<crate::ui::preferences::Preferences>() {
+        // A page always opens rendered, so it leaves the Markdown and SVG
+        // choice alone.
+        if !self.is_html() && cx.has_global::<crate::ui::preferences::Preferences>() {
             cx.update_global::<crate::ui::preferences::Preferences, _>(|prefs, _| {
                 prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
             });
@@ -94,7 +97,7 @@ impl gpui::Render for FileEditor {
                 .items_center()
                 .gap_1p5()
                 .when(!self.preview, |d| d.child(self.word_wrap_control(cx)))
-                .when(self.is_html(), |d| d.child(self.page_controls(cx)))
+                .when(self.is_local_html(), |d| d.child(self.page_controls(cx)))
                 .when(
                     self.is_markdown() || self.is_svg() || self.previews_html(),
                     |d| d.child(self.view_mode_control(cx)),

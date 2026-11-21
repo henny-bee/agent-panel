@@ -3952,6 +3952,8 @@ dependencies = [
  "tree-sitter-yaml",
  "tree-sitter-zig",
  "unicode-segmentation",
+ "webview2-com",
+ "windows 0.62.2",
  "wry",
 ]
 

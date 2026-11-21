@@ -124,7 +124,7 @@ impl FileEditor {
             .into_any_element()
     }
 
-    /// Reload for a rendered page, and Open in Browser for any HTML file.
+    /// Reload for a rendered page, and Open in Browser for a local HTML file.
     pub(super) fn page_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let control = |id: &'static str, label: &'static str| {
             div()

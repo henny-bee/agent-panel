@@ -79,6 +79,8 @@ impl Render for DraggedFile {
             .bg(pane_fill())
             .text_size(px(12.))
             .text_color(content(1.))
+            // The drag ghost crosses panes, and would pass under a page.
+            .child(crate::ui::html::cover())
             .child(file_type_icon(&name, false, false, 16.))
             .child(div().max_w(px(240.)).truncate().child(name))
     }

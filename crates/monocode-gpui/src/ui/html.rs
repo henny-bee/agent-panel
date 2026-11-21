@@ -5,6 +5,8 @@
 //! WKWebView (macOS) and Edge WebView2 (Windows, through wry) draw above the
 //! GPUI surface, so nothing GPUI paints can cover them. A view shows while
 //! frames draw its element, and hides under a popover or modal.
+#[cfg(windows)]
+mod webview2;
 #[cfg(not(target_os = "macos"))]
 use gpui::div;
 #[cfg(any(target_os = "macos", windows))]
@@ -28,7 +30,7 @@ use objc2_web_kit::{
 };
 #[cfg(target_os = "macos")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(any(target_os = "macos", windows))]
 use std::{
     cell::RefCell,
@@ -130,7 +132,7 @@ struct Hosted {
 #[cfg(windows)]
 struct Hosted {
     window: gpui::AnyWindowHandle,
-    web: wry::WebView,
+    web: webview2::Web,
     page: Page,
     bounds: Option<wry::Rect>,
     zoom: f32,
@@ -139,6 +141,9 @@ struct Hosted {
     /// The visible part of the element at its last paint, in window coordinates.
     rect: Option<Bounds<Pixels>>,
     shown: bool,
+    /// False for a Mono page that is leaving. WebView2 can't pass clicks
+    /// through to the page arriving under it, so it hides instead.
+    interactive: bool,
 }
 #[cfg(any(target_os = "macos", windows))]
 impl Hosted {
@@ -152,9 +157,7 @@ impl Hosted {
         #[cfg(target_os = "macos")]
         self.clip.setHidden(!shown);
         #[cfg(windows)]
-        {
-            let _ = self.web.set_visible(shown);
-        }
+        self.web.set_visible(shown);
     }
     fn hide(&mut self) {
         self.live = false;
@@ -210,7 +213,7 @@ type Host = Rc<RefCell<Option<Hosted>>>;
 struct Cover {
     window: gpui::AnyWindowHandle,
     bounds: std::cell::Cell<Bounds<Pixels>>,
-    gone: std::cell::Cell<bool>,
+    app: gpui::AsyncApp,
 }
 /// Lives in GPUI's element state like `InFrame`, for a cover.
 #[cfg(any(target_os = "macos", windows))]
@@ -218,10 +221,17 @@ struct CoverGuard(Rc<Cover>);
 #[cfg(any(target_os = "macos", windows))]
 impl Drop for CoverGuard {
     fn drop(&mut self) {
-        // The frame that closed the popover may be the last for a while, so
-        // the views under it show now.
-        self.0.gone.set(true);
-        show_uncovered(self.0.window);
+        // GPUI drops this after the frame's end, in no fixed order with the
+        // `InFrame` of a page that left in the same frame. The frame that
+        // closed the popover may also be the last for a while, so one more
+        // frame decides what shows.
+        let window = self.0.window;
+        self.0
+            .app
+            .spawn(async move |cx| {
+                cx.update_window(window, |root, _, cx| cx.notify(root.entity_id()))
+            })
+            .detach();
     }
 }
 #[cfg(any(target_os = "macos", windows))]
@@ -234,7 +244,9 @@ thread_local! {
 fn covered(window: gpui::AnyWindowHandle, bounds: Bounds<Pixels>) -> bool {
     COVERS.with_borrow(|covers| {
         covers.iter().filter_map(Weak::upgrade).any(|cover| {
-            !cover.gone.get() && cover.window == window && cover.bounds.get().intersects(&bounds)
+            let area = cover.bounds.get();
+            // An empty toast stack is a zero-height cover.
+            cover.window == window && !area.is_empty() && area.intersects(&bounds)
         })
     })
 }
@@ -249,6 +261,8 @@ fn show_uncovered(window: gpui::AnyWindowHandle) {
                 && hosted.live
             {
                 let shown = hosted.rect.is_some_and(|rect| !covered(window, rect));
+                #[cfg(windows)]
+                let shown = shown && hosted.interactive;
                 hosted.set_shown(shown);
             }
         }
@@ -260,14 +274,14 @@ pub(crate) fn cover() -> gpui::AnyElement {
     #[cfg(any(target_os = "macos", windows))]
     {
         canvas(
-            |bounds, window, _| {
+            |bounds, window, cx| {
                 window.with_global_id("html-cover".into(), |id, window| {
                     window.with_element_state::<CoverGuard, _>(id, |guard, window| {
                         let guard = guard.unwrap_or_else(|| {
                             let cover = Rc::new(Cover {
                                 window: window.window_handle(),
                                 bounds: std::cell::Cell::new(bounds),
-                                gone: std::cell::Cell::new(false),
+                                app: cx.to_async(),
                             });
                             COVERS.with_borrow_mut(|covers| covers.push(Rc::downgrade(&cover)));
                             CoverGuard(cover)
@@ -327,6 +341,9 @@ pub(crate) struct Html {
     /// How many `InFrame` guards GPUI holds for this page.
     #[cfg(any(target_os = "macos", windows))]
     frames: Rc<std::cell::Cell<usize>>,
+    /// The project a file page belongs to, which macOS lets it read.
+    #[cfg(target_os = "macos")]
+    root: PathBuf,
     /// WebView2 is starting.
     #[cfg(windows)]
     building: Rc<std::cell::Cell<bool>>,
@@ -373,7 +390,7 @@ fn sandbox(body: &str) -> String {
 /// The URL WebView2 loads a file from:
 /// `C:\My Pages\é.html` -> `file:///C:/My%20Pages/%C3%A9.html`.
 #[cfg(any(windows, test))]
-fn file_url(path: &std::path::Path) -> String {
+fn file_url(path: &Path) -> String {
     let path = path.to_string_lossy().replace('\\', "/");
     // Canonical Windows paths carry the verbatim prefix.
     let path = match path.strip_prefix("//?/UNC/") {
@@ -395,84 +412,58 @@ fn file_url(path: &std::path::Path) -> String {
     }
     url
 }
-/// Opens a page's web link in the browser once the app is free; WebView2 can
-/// raise its events while the app is busy.
-#[cfg(windows)]
-fn open_in_browser(app: &gpui::AsyncApp, url: String) {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        app.spawn(async move |cx| cx.update(|cx| cx.open_url(&url)))
-            .detach();
+/// Whether `url` is `page` itself, whatever its fragment, query or case:
+/// `file:///C:/a.html#top` is `file:///c:/A.html`.
+#[cfg(any(windows, test))]
+fn same_page(url: &str, page: &str) -> bool {
+    fn base(url: &str) -> &str {
+        url.split(['#', '?']).next().unwrap_or_default()
     }
+    base(url).eq_ignore_ascii_case(base(page))
 }
-/// The GPUI window a web view attaches to, from the handle paint saw.
-#[cfg(windows)]
-struct Parent(wry::raw_window_handle::RawWindowHandle);
-#[cfg(windows)]
-impl wry::raw_window_handle::HasWindowHandle for Parent {
-    fn window_handle(
-        &self,
-    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
-        // A closed window's handle fails to parent the view instead.
-        Ok(unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(self.0) })
+/// Whether `url` is a file on another machine than `page`'s, which Windows
+/// would reach over SMB: `file://server/share/a.png` from `file:///C:/a.html`.
+#[cfg(any(windows, test))]
+fn foreign_file(url: &str, page: &str) -> bool {
+    fn host(url: &str) -> Option<&str> {
+        let rest = url
+            .get(7..)
+            .filter(|_| url[..7].eq_ignore_ascii_case("file://"))?;
+        rest.split('/').next()
     }
+    host(url).is_some_and(|host_name| {
+        !host_name.is_empty() && !host(page).is_some_and(|own| own.eq_ignore_ascii_case(host_name))
+    })
 }
-/// Creates WebView2 off the frame: it pumps the message loop until the view
-/// exists, which runs GPUI's queued tasks, and those can't run while a frame
-/// holds the app.
-#[cfg(windows)]
-fn build(
-    parent: &Parent,
-    page: &Page,
-    bounds: wry::Rect,
-    app: gpui::AsyncApp,
-) -> wry::Result<wry::WebView> {
-    let file = matches!(page, Page::File(..));
-    // WebView2 writes its profile beside the executable unless given a
-    // folder, and an installed app can't write there. InPrivate keeps
-    // nothing in it between runs.
-    let mut context = wry::WebContext::new(Some(std::env::temp_dir().join("MCode WebView2")));
-    let links = app.clone();
-    let builder = wry::WebViewBuilder::new_with_web_context(&mut context)
-        .with_bounds(bounds)
-        .with_visible(false)
-        .with_focused(false)
-        .with_incognito(true)
-        .with_navigation_handler(move |url| {
-            open_in_browser(&links, url.clone());
-            if file {
-                url.starts_with("file:")
-            } else {
-                url.starts_with("about:") || url.starts_with("data:")
-            }
-        })
-        .with_new_window_req_handler(move |url, _| {
-            open_in_browser(&app, url);
-            wry::NewWindowResponse::Deny
-        });
-    let builder = match page {
-        Page::Markup(html) => builder.with_html(html.to_string()),
-        Page::File(path, _) => builder.with_url(file_url(path)),
-    };
-    builder.build_as_child(parent)
+/// Opens an HTML file in the default browser. Windows would otherwise give
+/// it to the `.html` type's app, which may be an editor.
+pub(crate) fn open_in_browser(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    if webview2::open_in_browser(&file_url(path)).is_ok() {
+        return Ok(());
+    }
+    monocode_core::files::open_path_with_default_app(path)
 }
-#[cfg(windows)]
-fn load(web: &wry::WebView, page: &Page) {
-    let _ = match page {
-        Page::Markup(html) => web.load_html(html),
-        Page::File(path, _) => web.load_url(&file_url(path)),
-    };
+/// The folder a file page may read on macOS: the project `root` when the
+/// page is inside it, otherwise its own folder.
+#[cfg(any(target_os = "macos", test))]
+fn read_access(path: &Path, root: &Path) -> PathBuf {
+    if !root.as_os_str().is_empty() && path.starts_with(root) {
+        root.to_path_buf()
+    } else {
+        path.parent().unwrap_or(path).to_path_buf()
+    }
 }
 #[cfg(target_os = "macos")]
-fn load(web: &WKWebView, page: &Page) {
+fn load(web: &WKWebView, page: &Page, root: &Path) {
     match page {
         Page::Markup(html) => unsafe {
             web.loadHTMLString_baseURL(&NSString::from_str(html), None);
         },
         Page::File(path, _) => {
             let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-            let folder = path.parent().unwrap_or(path);
             let folder = NSURL::fileURLWithPath_isDirectory(
-                &NSString::from_str(&folder.to_string_lossy()),
+                &NSString::from_str(&read_access(path, root).to_string_lossy()),
                 true,
             );
             unsafe { web.loadFileURL_allowingReadAccessToURL(&url, &folder) };
@@ -484,9 +475,18 @@ impl Html {
     pub(crate) fn new(body: String) -> Self {
         Self::from_source(Source::Markup(body))
     }
-    /// An HTML file, loaded from its folder with scripts allowed.
-    pub(crate) fn file(path: PathBuf) -> Self {
-        Self::from_source(Source::File(path))
+    /// An HTML file, loaded from its folder with scripts allowed. On macOS
+    /// it may read the project `root` when inside it, otherwise its folder.
+    pub(crate) fn file(path: PathBuf, root: &Path) -> Self {
+        #[cfg_attr(not(target_os = "macos"), expect(unused_mut))]
+        let mut html = Self::from_source(Source::File(path));
+        #[cfg(target_os = "macos")]
+        {
+            html.root = root.to_path_buf();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = root;
+        html
     }
     fn from_source(source: Source) -> Self {
         #[cfg(any(target_os = "macos", windows))]
@@ -503,6 +503,8 @@ impl Html {
             view,
             #[cfg(any(target_os = "macos", windows))]
             frames: Rc::default(),
+            #[cfg(target_os = "macos")]
+            root: PathBuf::new(),
             #[cfg(windows)]
             building: Rc::default(),
             #[cfg(windows)]
@@ -559,6 +561,7 @@ impl gpui::Render for Html {
             let frames = self.frames.clone();
             let entity = cx.entity_id();
             let page = self.page();
+            let root = self.root.clone();
             let app = cx.to_async();
             let interactive = self.interactive;
             canvas(
@@ -641,7 +644,7 @@ impl gpui::Render for Html {
                             let guard = NavigationGuard::alloc(mtm).set_ivars((app.clone(), file));
                             let guard: Retained<NavigationGuard> = msg_send![super(guard), init];
                             web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*guard)));
-                            load(&web, &page);
+                            load(&web, &page, &root);
                             clip.addSubview(&web);
                             Hosted {
                                 window: window.window_handle(),
@@ -658,7 +661,7 @@ impl gpui::Render for Html {
                     }
                     if let Some(view) = view.as_mut() {
                         if !view.page.same(&page) {
-                            load(&view.web, &page);
+                            load(&view.web, &page, &root);
                             view.page = page.clone();
                         }
                         parent.addSubview_positioned_relativeTo(
@@ -694,6 +697,7 @@ impl gpui::Render for Html {
             let failed = self.failed.clone();
             let page = self.page();
             let app = cx.to_async();
+            let interactive = self.interactive;
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -723,13 +727,13 @@ impl gpui::Render for Html {
                                 wry::raw_window_handle::HasWindowHandle::window_handle(&*window)
                         {
                             building.set(true);
-                            let parent = Parent(handle.as_raw());
+                            let parent = webview2::Parent(handle.as_raw());
                             let host = Rc::downgrade(&host);
                             let id = window.window_handle();
                             let (page, building, failed) =
                                 (page.clone(), building.clone(), failed.clone());
                             app.spawn(async move |cx| {
-                                let web = build(&parent, &page, rect, cx.clone());
+                                let web = webview2::Web::build(&parent, &page, rect, cx.clone());
                                 building.set(false);
                                 match web {
                                     Ok(web) => {
@@ -743,6 +747,7 @@ impl gpui::Render for Html {
                                                 live: false,
                                                 rect: None,
                                                 shown: false,
+                                                interactive: true,
                                             });
                                         }
                                     }
@@ -763,23 +768,24 @@ impl gpui::Render for Html {
                         return;
                     };
                     view.live = true;
+                    view.interactive = interactive;
                     view.rect = (!visible.is_empty()).then_some(visible);
                     if visible.is_empty() {
                         return;
                     }
                     if !view.page.same(&page) {
-                        load(&view.web, &page);
+                        view.web.load(&page);
                         view.page = page.clone();
                     }
                     if view.bounds != Some(rect) {
-                        let _ = view.web.set_bounds(rect);
+                        let _ = view.web.view.set_bounds(rect);
                         view.bounds = Some(rect);
                     }
                     // WebView2 follows the display's scale itself; the zoom
                     // matches MCode's interface zoom.
                     let zoom = window.content_zoom();
                     if view.zoom != zoom {
-                        let _ = view.web.zoom(f64::from(zoom));
+                        let _ = view.web.view.zoom(f64::from(zoom));
                         view.zoom = zoom;
                     }
                 },
@@ -808,7 +814,8 @@ impl Drop for Html {
         if let Some(view) = view {
             view.clip.removeFromSuperview();
         }
-        // Dropping wry's view destroys its child window.
+        // Dropping wry's view destroys its child window, and returns its
+        // keyboard focus to the GPUI window.
         #[cfg(windows)]
         drop(view);
     }
@@ -838,5 +845,38 @@ mod tests {
             url(r"\\?\UNC\server\share\b.html"),
             "file://server/share/b.html"
         );
+    }
+    #[test]
+    fn pages_stay_on_themselves_and_off_file_shares() {
+        let page = "file:///C:/My%20Pages/a.html";
+        assert!(same_page("file:///c:/my%20pages/A.html#top", page));
+        assert!(same_page("file:///C:/My%20Pages/a.html?x=1", page));
+        assert!(!same_page("file:///C:/My%20Pages/b.html", page));
+        assert!(!same_page("https://example.com/", page));
+        assert!(foreign_file("file://attacker/share/a.png", page));
+        assert!(foreign_file(
+            "FILE://attacker/a.png",
+            "http://mcode-page.localhost/"
+        ));
+        assert!(!foreign_file("file:///C:/My%20Pages/style.css", page));
+        assert!(!foreign_file("https://example.com/a.png", page));
+        // A page on a share still loads its own files.
+        assert!(!foreign_file(
+            "file://server/s/a.css",
+            "file://server/s/a.html"
+        ));
+    }
+    #[test]
+    fn a_file_reads_its_project_or_else_its_folder() {
+        let folder = |path: &str, root: &str| read_access(Path::new(path), Path::new(root));
+        assert_eq!(
+            folder("/work/app/docs/a.html", "/work/app"),
+            Path::new("/work/app")
+        );
+        assert_eq!(
+            folder("/tmp/out/a.html", "/work/app"),
+            Path::new("/tmp/out")
+        );
+        assert_eq!(folder("/tmp/out/a.html", ""), Path::new("/tmp/out"));
     }
 }
