@@ -86,7 +86,8 @@ impl Terminal {
         ))
     }
 
-    /// The HTTP(S) link under a window position, if the pointer is on a cell.
+    /// The web link or existing path under a window position, if the
+    /// pointer is on a cell.
     pub(super) fn link_at(&mut self, position: gpui::Point<gpui::Pixels>) -> Option<Link> {
         let g = self.geometry.get()?;
         let x = (position.x - g.origin.x) / g.cell.width;
@@ -99,7 +100,7 @@ impl Terminal {
             term.grid().display_offset(),
             GridPoint::new(y as usize, Column(x as usize)),
         );
-        link_at(&term, self.url_regex.as_mut()?, at)
+        link_at(&term, self.url_regex.as_mut()?, &self.cwd, at)
     }
 
     pub(super) fn mouse_down(
@@ -109,6 +110,14 @@ impl Terminal {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        // Ctrl+click (Cmd on macOS) takes a link even from a program
+        // tracking the mouse, which never sees that press.
+        self.pressed_link = (event.click_count == 1 && event.modifiers.secondary())
+            .then(|| self.link_at(event.position))
+            .flatten();
+        if self.pressed_link.is_some() {
+            return;
+        }
         let mode = *self.term.lock().mode();
         // A program tracking the mouse gets the click itself, as it gets
         // the wheel; Shift keeps the terminal's own selection.
@@ -119,9 +128,6 @@ impl Terminal {
             self.reported = Some((line, column));
             return;
         }
-        self.pressed_link = (event.click_count == 1 && !event.modifiers.shift)
-            .then(|| self.link_at(event.position))
-            .flatten();
         let Some((at, side)) = self.grid_point(event.position) else {
             return;
         };
@@ -163,26 +169,31 @@ impl Terminal {
         cx.notify();
     }
 
-    /// A click that pressed and released on the same link, without
-    /// dragging out a selection, opens it as the web build's xterm does.
-    pub(super) fn mouse_up(&mut self, event: &gpui::MouseUpEvent, cx: &mut Context<Self>) {
+    /// A Ctrl+click that pressed and released on the same link opens it: a
+    /// web link in the browser, a file in MCode, a folder in the file manager.
+    pub(super) fn mouse_up(
+        &mut self,
+        event: &gpui::MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(link) = self.pressed_link.take() {
+            if self.link_at(event.position).as_ref() == Some(&link) {
+                match link.target {
+                    Target::Web => cx.open_url(&link.uri),
+                    Target::File => {
+                        window.dispatch_action(Box::new(crate::ui::files::OpenPath(link.uri)), cx)
+                    }
+                    Target::Folder => cx.open_with_system(std::path::Path::new(&link.uri)),
+                }
+            }
+            return;
+        }
         if self.reported.is_some() {
             self.report_release(event.position, &event.modifiers);
             return;
         }
         self.stop_selection();
-        let Some(link) = self.pressed_link.take() else {
-            return;
-        };
-        let selected = self
-            .term
-            .lock()
-            .selection
-            .as_ref()
-            .is_some_and(|selection| !selection.is_empty());
-        if !selected && self.link_at(event.position).as_ref() == Some(&link) {
-            cx.open_url(&link.uri);
-        }
     }
 
     /// Ends a reported press, unless the program stopped tracking meanwhile.
@@ -322,9 +333,14 @@ impl Terminal {
     }
 }
 
-/// The HTTP(S) link covering `at`: the OSC 8 hyperlink on its cells, else
-/// a plain URL on its logical line.
-pub(super) fn link_at<T>(term: &Term<T>, regex: &mut RegexSearch, at: GridPoint) -> Option<Link> {
+/// The link covering `at`: the HTTP(S) OSC 8 hyperlink on its cells, else
+/// a plain URL on its logical line, else a path there that exists.
+pub(super) fn link_at<T>(
+    term: &Term<T>,
+    regex: &mut RegexSearch,
+    cwd: &str,
+    at: GridPoint,
+) -> Option<Link> {
     let start = term.line_search_left(at);
     let end = term.line_search_right(at);
     if let Some(hyperlink) = term.grid()[at].hyperlink() {
@@ -341,6 +357,7 @@ pub(super) fn link_at<T>(term: &Term<T>, regex: &mut RegexSearch, at: GridPoint)
         return is_web_link(uri).then(|| Link {
             range: first..=last,
             uri: uri.to_owned(),
+            target: Target::Web,
         });
     }
     RegexIter::new(start, end, Direction::Right, term, regex)
@@ -358,9 +375,94 @@ pub(super) fn link_at<T>(term: &Term<T>, regex: &mut RegexSearch, at: GridPoint)
                 }
                 point = point.add(term, Boundary::None, 1);
             }
-            Link { range, uri }
+            Link {
+                range,
+                uri,
+                target: Target::Web,
+            }
         })
         .filter(|link| is_web_link(&link.uri))
+        .or_else(|| path_at(term, cwd, at, start..=end))
+}
+
+/// The path covering `at`, read as the word around it (wrapped rows
+/// included), when it names a file or folder that exists. `Read(src/a.rs)`
+/// gives `src/a.rs`, and `src/a.rs:12:3,` that file at line 12, column 3;
+/// relative paths start at `cwd`.
+/// shortcut: paths with spaces are not found, and the shell's later `cd`s are
+/// unknown; read OSC 7 if the bottom Terminal needs them.
+fn path_at<T>(
+    term: &Term<T>,
+    cwd: &str,
+    at: GridPoint,
+    line: RangeInclusive<GridPoint>,
+) -> Option<Link> {
+    let grid = term.grid();
+    let spacer = |point: GridPoint| {
+        grid[point]
+            .flags
+            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+    };
+    let breaks = |point: GridPoint| {
+        let c = grid[point].c;
+        !spacer(point)
+            && (c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '|' | '\0'))
+    };
+    if breaks(at) {
+        return None;
+    }
+    let mut first = at;
+    while first > *line.start() && !breaks(first.sub(term, Boundary::None, 1)) {
+        first = first.sub(term, Boundary::None, 1);
+    }
+    let mut cells = Vec::new();
+    let mut point = first;
+    loop {
+        if !spacer(point) {
+            cells.push((point, grid[point].c));
+        }
+        if point >= *line.end() || breaks(point.add(term, Boundary::None, 1)) {
+            break;
+        }
+        point = point.add(term, Boundary::None, 1);
+    }
+    while cells
+        .last()
+        .is_some_and(|(_, c)| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'))
+    {
+        cells.pop();
+    }
+    // The whole word, else what follows its first bracket: `Read(src/a.rs`.
+    let skip = cells
+        .iter()
+        .take_while(|(_, c)| matches!(c, '(' | '[' | '{'))
+        .count();
+    let open = cells.iter().position(|(_, c)| *c == '(').map(|ix| ix + 1);
+    [Some(skip), open].into_iter().flatten().find_map(|from| {
+        let cells = cells.get(from..).filter(|cells| !cells.is_empty())?;
+        let range = cells[0].0..=cells[cells.len() - 1].0;
+        if !range.contains(&at) {
+            return None;
+        }
+        let text: String = cells.iter().map(|(_, c)| c).collect();
+        let named = text.split(':').next().unwrap_or_default();
+        // A word without `/` or `.` stays text, even when `cwd/src` exists.
+        if !(named.contains('/') || named.contains('.')) || text.contains("://") {
+            return None;
+        }
+        let (path, location) =
+            crate::ui::files::file_location(&text, &working_dir(cwd).to_string_lossy());
+        let target = match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => Target::Folder,
+            Ok(_) => Target::File,
+            Err(_) => return None,
+        };
+        let uri = match location {
+            Some((line, column)) if target == Target::File => format!("{path}:{line}:{column}"),
+            _ => path,
+        };
+        Some(Link { range, uri, target })
+    })
 }
 
 /// Bytes a keystroke sends, or None to leave it to the app's bindings.

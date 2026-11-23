@@ -75,6 +75,120 @@ fn links_cover_plain_urls_and_osc8_hyperlinks(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// A folder with `src/main.rs` and `app/`, unique to this test.
+fn path_fixture(name: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("mcode-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("app")).unwrap();
+    std::fs::write(dir.join("src/main.rs"), "").unwrap();
+    dir.to_string_lossy().into_owned()
+}
+fn cell_at(line: usize, column: usize) -> gpui::Point<gpui::Pixels> {
+    point(px(column as f32 * 8. + 1.), px(line as f32 * 16. + 1.))
+}
+
+#[gpui::test]
+fn links_cover_paths_that_exist(cx: &mut gpui::TestAppContext) {
+    let root = path_fixture("paths");
+    let view = cx.new(|cx| Terminal::new(root.clone(), cx));
+    view.update(cx, |terminal, _| {
+        let cell = size(px(8.), px(16.));
+        // Wide enough that a long temp folder does not wrap.
+        terminal.resize(200, 4, cell);
+        terminal.geometry.set(Some(Geometry {
+            origin: point(px(0.), px(0.)),
+            cell,
+        }));
+        write_note(
+            &terminal.term,
+            &format!(
+                "Read(src/main.rs) and src/main.rs:42:7,\r\n\
+                 open `app/` or src/gone.rs, not src\r\n{root}/app/."
+            ),
+        );
+        let span = |line, from, to| {
+            GridPoint::new(Line(line), Column(from))..=GridPoint::new(Line(line), Column(to))
+        };
+        // A tool line's path, without the call around it.
+        let read = terminal.link_at(cell_at(0, 7)).expect("Read(path)");
+        assert_eq!(read.target, Target::File);
+        assert_eq!(read.uri, format!("{root}/src/main.rs"));
+        assert_eq!(read.range, span(0, 5, 15));
+        assert_eq!(terminal.link_at(cell_at(0, 1)), None, "the call name");
+        // A line and column, trailing comma dropped.
+        let at_line = terminal.link_at(cell_at(0, 25)).expect("path:line:col");
+        assert_eq!(at_line.uri, format!("{root}/src/main.rs:42:7"));
+        assert_eq!(at_line.range, span(0, 22, 37));
+        assert_eq!(terminal.link_at(cell_at(0, 19)), None);
+
+        let app = terminal.link_at(cell_at(1, 7)).expect("relative folder");
+        assert_eq!(app.target, Target::Folder);
+        assert_eq!(app.range, span(1, 6, 9));
+        assert_eq!(terminal.link_at(cell_at(1, 17)), None, "missing file");
+        assert_eq!(terminal.link_at(cell_at(1, 33)), None, "bare word");
+
+        let absolute = terminal.link_at(cell_at(2, 2)).expect("absolute folder");
+        assert_eq!(absolute.target, Target::Folder);
+        assert_eq!(absolute.range, span(2, 0, root.len() + 4));
+    });
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[gpui::test]
+fn ctrl_click_takes_links_from_a_program_tracking_the_mouse(cx: &mut gpui::TestAppContext) {
+    let root = path_fixture("ctrl-click");
+    let window = cx.add_window(|_, cx| Terminal::new(root.clone(), cx));
+    window
+        .update(cx, |terminal, window, cx| {
+            let cell = size(px(8.), px(16.));
+            terminal.resize(60, 4, cell);
+            terminal.geometry.set(Some(Geometry {
+                origin: point(px(0.), px(0.)),
+                cell,
+            }));
+            // As the Claude CLI does: mouse tracking with SGR reports.
+            write_note(&terminal.term, "\x1b[?1000h\x1b[?1006hsee src/main.rs now");
+            let press = |position, modifiers| MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                click_count: 1,
+                first_mouse: false,
+            };
+            let release = |position, modifiers| gpui::MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                click_count: 1,
+            };
+            let ctrl = Modifiers::secondary_key();
+            let (link, text) = (cell_at(0, 6), cell_at(0, 1));
+
+            // A plain click on the path still goes to the program.
+            terminal.mouse_down(&press(link, Modifiers::default()), window, cx);
+            assert!(terminal.reported.is_some());
+            assert_eq!(terminal.pressed_link, None);
+            terminal.mouse_up(&release(link, Modifiers::default()), window, cx);
+            assert!(terminal.reported.is_none());
+
+            // Ctrl+click on it is the terminal's, and the program never hears it.
+            terminal.mouse_down(&press(link, ctrl), window, cx);
+            assert!(terminal.reported.is_none());
+            let pressed = terminal.pressed_link.clone().expect("Ctrl+click on a path");
+            assert_eq!(pressed.uri, format!("{root}/src/main.rs"));
+            terminal.mouse_up(&release(link, ctrl), window, cx);
+            assert_eq!(terminal.pressed_link, None);
+            assert!(terminal.reported.is_none());
+
+            // Ctrl+click off any link is the program's again.
+            terminal.mouse_down(&press(text, ctrl), window, cx);
+            assert!(terminal.reported.is_some());
+            assert_eq!(terminal.pressed_link, None);
+        })
+        .unwrap();
+    std::fs::remove_dir_all(&root).ok();
+}
+
 #[gpui::test]
 fn dragging_at_edges_extends_selection_through_history(cx: &mut gpui::TestAppContext) {
     let view = cx.new(|cx| Terminal::new("/tmp".into(), cx));
