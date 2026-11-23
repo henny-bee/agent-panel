@@ -65,7 +65,10 @@ impl Element for Grid {
                 t.resize(columns, lines, cell);
                 t.geometry.set(Some(Geometry { origin, cell }));
             }
-            let link = t.hover.and_then(|position| t.link_at(position));
+            let link = t
+                .hover
+                .filter(|_| window.modifiers().secondary())
+                .and_then(|position| t.link_at(position));
             (t.term.clone(), link)
         });
 
@@ -266,9 +269,9 @@ impl Element for Grid {
             }
         });
         let terminal = self.terminal.downgrade();
-        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
             if phase == gpui::DispatchPhase::Capture && event.button == MouseButton::Left {
-                let _ = terminal.update(cx, |terminal, cx| terminal.mouse_up(event, cx));
+                let _ = terminal.update(cx, |terminal, cx| terminal.mouse_up(event, window, cx));
             }
         });
         if let Some(hitbox) = &painted.link_hitbox {

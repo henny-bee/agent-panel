@@ -112,11 +112,20 @@ struct Geometry {
     cell: Size<gpui::Pixels>,
 }
 
-/// An HTTP(S) link in the grid: an OSC 8 hyperlink or a plain URL.
+/// A link in the grid: an HTTP(S) OSC 8 hyperlink or plain URL, or a path
+/// that exists on disk.
 #[derive(Clone, PartialEq, Debug)]
 struct Link {
     range: RangeInclusive<GridPoint>,
+    /// The URL, or the absolute path with any `:line:col` it named.
     uri: String,
+    target: Target,
+}
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Target {
+    Web,
+    File,
+    Folder,
 }
 
 pub(crate) struct Terminal {
@@ -147,7 +156,7 @@ pub(crate) struct Terminal {
     url_regex: Option<RegexSearch>,
     /// The pointer over the grid, for underlining the link beneath it.
     hover: Option<gpui::Point<gpui::Pixels>>,
-    /// The link a plain click pressed; releasing on it opens it.
+    /// The link a Ctrl+click pressed; releasing on it opens it.
     pressed_link: Option<Link>,
     pub(crate) visible: bool,
     _events: Task<()>,
@@ -532,6 +541,12 @@ impl Render for Terminal {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !hovered && this.hover.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            // Links show only while Ctrl (Cmd) is held.
+            .on_modifiers_changed(cx.listener(|this, _, _, cx| {
+                if this.hover.is_some() {
                     cx.notify();
                 }
             }))
