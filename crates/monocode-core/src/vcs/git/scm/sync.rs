@@ -1,36 +1,49 @@
 use super::*;
 
 pub(super) fn sync_for(root: &Path) -> Sync {
-    let remote = git_remote_name(root);
-    let upstream = git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]);
-    let default_branch = git_default_branch(root, remote.as_deref());
-    let default_ref = match (&remote, &default_branch) {
-        (Some(remote), Some(branch)) => Some(format!("{remote}/{branch}")),
-        _ => None,
-    };
+    // Side by side, as in `diff_index_with`: only the default branch waits on
+    // the remote. Without an upstream its count fails and goes unused.
+    let ((upstream, upstream_counts, head_pushed), (remote, default_branch, default_counts)) =
+        std::thread::scope(|s| {
+            let upstream =
+                s.spawn(|| git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]));
+            let upstream_counts = s.spawn(|| git_ahead_behind(root, "@{upstream}"));
+            let head_pushed = s.spawn(|| {
+                git_stdout(
+                    root,
+                    &[
+                        "for-each-ref",
+                        "--count=1",
+                        "--contains",
+                        "HEAD",
+                        "refs/remotes",
+                    ],
+                )
+                .is_some()
+            });
+            let remote = git_remote_name(root);
+            let default_branch = git_default_branch(root, remote.as_deref());
+            let default_counts = match (&remote, &default_branch) {
+                (Some(remote), Some(branch)) => {
+                    Some(git_ahead_behind(root, &format!("{remote}/{branch}")))
+                }
+                _ => None,
+            };
+            (
+                (
+                    upstream.join().unwrap(),
+                    upstream_counts.join().unwrap(),
+                    head_pushed.join().unwrap(),
+                ),
+                (remote, default_branch, default_counts),
+            )
+        });
     let (ahead, behind) = if upstream.is_some() {
-        git_ahead_behind(root, "@{upstream}")
-    } else if let Some(base) = default_ref.as_deref() {
-        git_ahead_behind(root, base)
+        upstream_counts
     } else {
-        (0, 0)
+        default_counts.unwrap_or((0, 0))
     };
-    let ahead_of_default = if let Some(base) = default_ref.as_deref() {
-        git_ahead_behind(root, base).0
-    } else {
-        ahead
-    };
-    let head_pushed = git_stdout(
-        root,
-        &[
-            "for-each-ref",
-            "--count=1",
-            "--contains",
-            "HEAD",
-            "refs/remotes",
-        ],
-    )
-    .is_some();
+    let ahead_of_default = default_counts.map_or(ahead, |(ahead, _)| ahead);
     Sync {
         remote,
         upstream,
