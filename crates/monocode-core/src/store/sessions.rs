@@ -310,6 +310,29 @@ impl Store {
         Ok(Transcript { rows })
     }
 
+    /// Replaces every row of a conversation, as when a Claude Code session run
+    /// in the CLI opens as a chat. Row-indexed turn receipts no longer apply.
+    pub fn replace_rows(&mut self, session: i64, rows: &[Row]) -> Result<(), String> {
+        if self.remote_session(session)?.is_some() {
+            return Err("Remote transcripts are owned by the host".into());
+        }
+        if self.shared.is_some() {
+            self.shared_replace_rows(session, rows)?;
+        } else {
+            // The rows come from the CLI's own transcript, which stays, so a
+            // failed write after this loses nothing that can't be read again.
+            self.conn
+                .execute("DELETE FROM native_rows WHERE session_id=?1", [session])
+                .map_err(|e| e.to_string())?;
+            self.write_rows(session, 0, rows)?;
+        }
+        if let Some(mut settings) = self.agent_settings(session)? {
+            settings.turns.clear();
+            self.save_agent_settings(session, &settings)?;
+        }
+        Ok(())
+    }
+
     pub fn write_rows(&mut self, session: i64, start: usize, rows: &[Row]) -> Result<(), String> {
         self.write_rows_with_message(session, start, rows, None)
     }

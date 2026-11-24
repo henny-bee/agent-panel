@@ -337,7 +337,7 @@ impl TranscriptView {
 
     /// An image that opens full screen. Its decoded sprite is cached by `key`
     /// and position, within a bound on how many and how large.
-    fn image_tile(
+    pub(super) fn image_tile(
         &mut self,
         file: &Attachment,
         key: &str,

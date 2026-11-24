@@ -14,8 +14,16 @@ impl Conversation {
         } else {
             None
         };
-        self.input
-            .update(cx, |input, cx| input.selected_command(command, cx));
+        // Claude Desktop's hint once a session is under way.
+        let placeholder = if self.summary.has_messages {
+            "Type / for commands"
+        } else {
+            "Ask, build, or describe a change…"
+        };
+        self.input.update(cx, |input, cx| {
+            input.selected_command(command, cx);
+            input.set_placeholder(placeholder, cx);
+        });
         let runner = self.composer_runner(cx);
         let beside = cx
             .try_global::<crate::ui::preferences::Preferences>()
@@ -65,6 +73,8 @@ impl Conversation {
             .child(self.changes_shelf(window, cx))
             .child(self.background_shelf(window, cx))
             .child(self.message_queue(window, cx))
+            .children(self.cut_notice_bar(cx))
+            .children(self.resume_picker(cx))
             .children(if self.is_remote() { None } else { self.auth_notice(cx) })
             .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded_lg().border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
             .when_some(self.settings.handoff.clone(), |d, handoff| {
@@ -238,8 +248,12 @@ impl Conversation {
                                     .child(
                                         tool_pill("composer-access", "Access")
                                             .aria_label(format!(
-                                                "Access, {}",
-                                                self.settings.access.label()
+                                                "Mode, {}",
+                                                if self.settings.plan {
+                                                    "Plan"
+                                                } else {
+                                                    self.settings.access.label()
+                                                }
                                             ))
                                             .aria_expanded(self.menu_is(ComposerMenu::Access))
                                             .child(self.access_anchor.probe())
@@ -249,6 +263,7 @@ impl Conversation {
                                             .child(
                                                 icon(
                                                     match self.settings.access {
+                                                        _ if self.settings.plan => "list-bullet",
                                                         AccessMode::FullAccess => "shield-alert",
                                                         AccessMode::AutoAcceptEdits => {
                                                             "pencil-edit"
@@ -268,7 +283,11 @@ impl Conversation {
                                                     },
                                                 ),
                                             )
-                                            .child(pill_label(self.settings.access.label()))
+                                            .child(pill_label(if self.settings.plan {
+                                                "Plan"
+                                            } else {
+                                                self.settings.access.label()
+                                            }))
                                             .child(icon("chevron-down", 12.)),
                                     ),
                             )
@@ -692,6 +711,26 @@ impl Render for Conversation {
         }
         self.attachment_drop_target("session-chat", cx)
             .relative()
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                this.approval_key(event, cx);
+            }))
+            // The composer binds these keys; a waiting request or ↑ recall
+            // gets them first.
+            .capture_action(cx.listener(|this, _: &input::SubmitSecondary, _, cx| {
+                if !this.approve_front(cx) {
+                    cx.propagate();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &input::Up, window, cx| {
+                if !this.resume_step(true, cx) && !this.recall(true, window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &input::Down, window, cx| {
+                if !this.resume_step(false, cx) && !this.recall(false, window, cx) {
+                    cx.propagate();
+                }
+            }))
             .capture_action(
                 cx.listener(|this, _: &crate::ui::popover::DismissMenu, window, cx| {
                     if this.close_remote_plan(cx) {

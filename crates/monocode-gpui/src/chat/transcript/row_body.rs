@@ -269,7 +269,15 @@ impl TranscriptView {
                 group,
                 icon: glyph,
                 active,
+                counts,
+                images,
             } => {
+                // Opened, each step shows its own thumbnails instead.
+                let strip = if open_phase(self, group, active) {
+                    None
+                } else {
+                    self.image_strip(group, &images, cx)
+                };
                 let open = self
                     .phases
                     .get(&group)
@@ -298,6 +306,8 @@ impl TranscriptView {
                         cx,
                     )
                 });
+                // Claude Desktop's summary line: the sentence, the edits' line
+                // counts and a chevron; only running work keeps its spinner.
                 div()
                     .id(("phase", group))
                     .role(Role::Button)
@@ -309,22 +319,24 @@ impl TranscriptView {
                     .group("activity-phase")
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(6.))
                     .py_1()
                     .text_size(px(14.))
                     .line_height(px(20.))
                     .text_color(content(0.5))
-                    // The tile animates itself; the transcript only tells it
-                    // what the phase is doing.
-                    .child(
-                        phase_tile.clone().cached(
-                            StyleRefinement::default()
-                                .w(px(crate::ui::tabs::tile::ACTIVITY_TILE.w))
-                                .h(px(crate::ui::tabs::tile::ACTIVITY_TILE.h))
-                                .flex_shrink_0(),
-                        ),
-                    )
-                    .child(div().min_w_0().flex_1().truncate().child(
+                    .when(active, |d| {
+                        // The tile animates itself; the transcript only tells
+                        // it what the phase is doing.
+                        d.child(
+                            phase_tile.clone().cached(
+                                StyleRefinement::default()
+                                    .w(px(crate::ui::tabs::tile::ACTIVITY_TILE.w))
+                                    .h(px(crate::ui::tabs::tile::ACTIVITY_TILE.h))
+                                    .flex_shrink_0(),
+                            ),
+                        )
+                    })
+                    .child(div().min_w_0().flex_shrink(1.).truncate().child(
                         if active && !cx.reduce_motion() {
                             crate::chat::transcript::activity::shimmer(
                                 title,
@@ -334,6 +346,24 @@ impl TranscriptView {
                             div().child(title).into_any_element()
                         },
                     ))
+                    .when(counts.0 + counts.1 > 0, |d| {
+                        d.child(crate::chat::transcript::tool_detail::counts_label(
+                            counts, cx,
+                        ))
+                    })
+                    .when_some(strip, |d, strip| d.child(div().flex_1()).child(strip))
+                    .child(
+                        icon(
+                            if open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            },
+                            14.,
+                        )
+                        .flex_shrink_0()
+                        .text_color(content(0.4)),
+                    )
                     .hover(|s| s.text_color(content(0.8)))
                     .on_hover({
                         let tile = phase_tile.clone();
@@ -359,13 +389,10 @@ impl TranscriptView {
                 let tiled = group.is_none() && !call.is_milestone() && call.panel().is_none();
                 let loading =
                     tiled && (call.state == ToolState::Running || live) && !cx.reduce_motion();
+                let _ = tail;
                 div()
                     .relative()
                     .w_full()
-                    .when(group.is_some(), |d| {
-                        d.pl(px(crate::chat::transcript::activity::TILE_RAIL_INDENT))
-                            .child(crate::chat::transcript::activity::tile_rail(tail))
-                    })
                     // A lone step leads with a tile like a group's, coloured by
                     // the kind of work; while it runs, its spinner sits there.
                     .when(tiled, |d| {
@@ -439,7 +466,7 @@ impl TranscriptView {
                     .hover(|s| s.text_color(content(0.8)))
                     .when(!nested_phase, |d| d.child(icon("minus", 14.)))
                     .child(div().min_w_0().flex_1().truncate().child(if open {
-                        "Thinking".into()
+                        "Thought process".into()
                     } else {
                         summary
                     }))
@@ -451,6 +478,10 @@ impl TranscriptView {
                 let md = &prepared.row;
                 let body = if let Part::Code { fence, lines } = &md.part {
                     self.code(fence.clone(), lines.clone(), ix, cx)
+                } else if let Part::Visual { id, caption } = &md.part
+                    && let Some(path) = id.strip_prefix("image:")
+                {
+                    self.reply_image(path, caption, cx)
                 } else if let Part::Visual { id, caption } = &md.part {
                     self.placed_visual(id, caption, cx)
                 } else {
@@ -726,17 +757,28 @@ impl TranscriptView {
                 }
             }
         };
-        let body = if let Some((_, tail)) = row.thought_phase {
+        // An opened group's steps sit in one bordered card, a line between
+        // each step, as Claude Desktop lists them.
+        let body = if let Some(group) = self.rows[ix].phase_group() {
+            let opens = ix > 0
+                && matches!(self.rows[ix - 1].body, Body::Phase { group: g, .. } if g == group);
+            let closes = match self.rows[ix].body {
+                Body::Tool { tail, .. } => tail,
+                _ => self.rows[ix].thought_phase.is_some_and(|(_, tail)| tail),
+            };
+            let divided =
+                matches!(self.rows[ix].body, Body::Tool { .. } | Body::Reasoning) && !opens;
             div()
                 .relative()
                 .w_full()
-                .pl(px(crate::chat::transcript::activity::TILE_RAIL_INDENT))
-                .when(!tail || thought_header, |d| {
-                    d.child(crate::chat::transcript::activity::tile_rail_branch(
-                        tail,
-                        thought_header,
-                    ))
-                })
+                .min_w_0()
+                .px(px(12.))
+                .border_color(content(0.08))
+                .border_l_1()
+                .border_r_1()
+                .when(divided || opens, |d| d.border_t_1())
+                .when(opens, |d| d.rounded_t(px(10.)))
+                .when(closes, |d| d.border_b_1().rounded_b(px(10.)))
                 .child(body)
                 .into_any_element()
         } else {
@@ -1002,4 +1044,12 @@ impl TranscriptView {
             .child(body)
             .into_any_element()
     }
+}
+
+/// Whether a phase's steps are showing, as its header decides.
+fn open_phase(view: &TranscriptView, group: usize, active: bool) -> bool {
+    view.phases
+        .get(&group)
+        .copied()
+        .unwrap_or(view.phase_opens(active))
 }

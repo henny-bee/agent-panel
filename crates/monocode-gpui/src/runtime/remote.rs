@@ -441,6 +441,7 @@ pub(crate) fn approvals(snapshot: &Value) -> Vec<Approval> {
                     .unwrap_or("")
                     .into(),
                 can_remember: false,
+                plan: None,
             })
         })
         .collect()
@@ -745,7 +746,10 @@ pub(crate) fn run_with_client(
                         .map_err(|_| "Invalid host request ID")?
                 );
                 match control.decision {
-                    Decision::Allow | Decision::Session => next["decision"] = json!("allow"),
+                    Decision::Allow | Decision::Session | Decision::AcceptPlan(_) => {
+                        next["decision"] = json!("allow")
+                    }
+                    Decision::RevisePlan(_) => next["decision"] = json!("deny"),
                     Decision::Deny
                         if current_question
                             .as_ref()

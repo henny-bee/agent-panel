@@ -300,6 +300,7 @@ fn transcript(blocks: &[Value]) -> rusqlite::Result<Transcript> {
                 output: tool["detail"].as_str().filter(|s| !s.is_empty()).or(preview["output"].as_str()).unwrap_or("").into(),
                 panel: crate::session::tool::tasks::from_desktop(block),
                 display: None,
+                images: Vec::new(),
                 // Imported activity is historical, never an active native job.
                 state: match tool["status"].as_str() {
                     Some("failed" | "error") => ToolState::Failed,

@@ -368,15 +368,21 @@ fn same_row(a: &UiRow, b: &UiRow) -> bool {
                     group,
                     icon,
                     active,
+                    counts,
+                    images,
                 },
                 Body::Phase {
                     title: other_title,
                     group: other_group,
                     icon: other_icon,
                     active: other_active,
+                    counts: other_counts,
+                    images: other_images,
                 },
             ) => {
-                title == other_title
+                images == other_images
+                    && counts == other_counts
+                    && title == other_title
                     && group == other_group
                     && icon == other_icon
                     && active == other_active

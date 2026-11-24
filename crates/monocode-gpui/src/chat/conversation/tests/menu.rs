@@ -777,3 +777,57 @@ fn claude_sessions_started_as_the_cli_or_the_chat_ignore_the_switch(cx: &mut Tes
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn the_mode_switch_moves_a_claude_session_between_the_cli_and_the_chat(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |c, _, cx| {
+            cx.set_global(crate::ui::preferences::Preferences {
+                claude_terminal: false,
+                ..Default::default()
+            });
+            assert_eq!(c.claude_mode(cx), Some(false));
+            // Never while a turn runs.
+            c.busy = true;
+            c.switch_claude_mode(true, cx);
+            assert_eq!(c.claude_mode(cx), Some(false));
+            c.busy = false;
+            c.switch_claude_mode(true, cx);
+            assert_eq!(c.claude_mode(cx), Some(true));
+            // Back before a frame could start a real CLI. The CLI's history
+            // replaces what the chat held: here it had none.
+            locked(&c.store)
+                .unwrap()
+                .write_rows(
+                    c.summary.id,
+                    0,
+                    &[monocode_core::session::transcript::Row {
+                        role: "user".into(),
+                        text: "stale".into(),
+                        first: true,
+                        sent_at: None,
+                    }],
+                )
+                .unwrap();
+            c.switch_claude_mode(false, cx);
+            assert_eq!(c.claude_mode_blocked(), Some("Opening as chat…"));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |c, _, cx| {
+            assert_eq!(c.claude_mode(cx), Some(false));
+            assert!(c.settings.chat && !c.settings.terminal);
+            assert!(
+                locked(&c.store)
+                    .unwrap()
+                    .load(c.summary.id)
+                    .unwrap()
+                    .rows
+                    .is_empty()
+            );
+            assert!(c.claude_mode_blocked().is_none());
+        })
+        .unwrap();
+}

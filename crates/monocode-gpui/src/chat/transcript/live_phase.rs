@@ -201,8 +201,10 @@ fn paint_mask(bounds: Bounds<Pixels>, begin: bool, top: f32, bottom: f32, window
             for (at_top, height) in [(true, top), (false, bottom)] {
                 let height = height.min(bounds.size.height.as_f32());
                 for y in 0..height.ceil() as usize {
-                    let mut color: gpui::Hsla = gpui::rgb(crate::ui::theme::CHAT).into();
-                    color.a = (1. - (y as f32 + 0.5) / height).clamp(0., 1.);
+                    // The pane's themed fill, not the dark default, or a light or
+                    // grey theme gets black bands over the steps.
+                    let mut color = crate::ui::theme::pane_fill();
+                    color.a *= (1. - (y as f32 + 0.5) / height).clamp(0., 1.);
                     let origin = gpui::point(
                         bounds.left(),
                         if at_top {

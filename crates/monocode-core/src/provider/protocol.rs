@@ -620,6 +620,26 @@ impl Protocol {
                                                 .join("\n")
                                         });
                                     tool.bound_output();
+                                    // A screenshot or an image the tool read.
+                                    let images = block["content"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|b| b["type"] == "image")
+                                        .take(8)
+                                        .enumerate()
+                                        .filter_map(|(ix, b)| {
+                                            crate::session::tool::save_image(
+                                                &tool.id,
+                                                ix,
+                                                b["source"]["media_type"].as_str()?,
+                                                b["source"]["data"].as_str()?,
+                                            )
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if !images.is_empty() {
+                                        tool.images = images;
+                                    }
                                     tool.state = if block["is_error"] == true {
                                         ToolState::Failed
                                     } else {

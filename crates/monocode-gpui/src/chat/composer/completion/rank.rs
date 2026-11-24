@@ -113,6 +113,11 @@ impl Completion {
                     "Summarize older conversation context to free space",
                 ),
                 (
+                    "resume",
+                    "Resume",
+                    "Open another Claude Code session from this folder",
+                ),
+                (
                     "add-to-folder",
                     "Add to folder",
                     "Place this session in an existing or new sidebar folder",
@@ -134,6 +139,9 @@ impl Completion {
             .enumerate()
             {
                 if matches!(id, "stage" | "commit") && self.has_user_command(id) {
+                    continue;
+                }
+                if id == "resume" && self.provider != monocode_core::provider::Kind::Claude {
                     continue;
                 }
                 if id == "btw"
@@ -162,7 +170,7 @@ impl Completion {
                             builtin: Some(id),
                             mode: (!matches!(
                                 id,
-                                "compact" | "btw" | "stage" | "commit" | "visualize"
+                                "compact" | "btw" | "stage" | "commit" | "visualize" | "resume"
                             ))
                             .then_some(id),
                             file: false,
@@ -172,6 +180,12 @@ impl Completion {
                 }
             }
             for command in &self.native_commands {
+                // MCode's own `/resume` lists these sessions for a chat.
+                if self.provider == monocode_core::provider::Kind::Claude
+                    && command.invocation.trim_start_matches('/') == "resume"
+                {
+                    continue;
+                }
                 if let Some(score) = composer::score(
                     &token.query,
                     &format!(
@@ -224,6 +238,7 @@ impl Completion {
                         | "btw"
                         | "mono"
                         | "monocode"
+                        | "resume"
                 ) {
                     continue;
                 }

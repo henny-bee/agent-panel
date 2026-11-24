@@ -47,6 +47,7 @@ fn clicking_a_phase_uses_one_reveal_and_rapid_toggles_preserve_its_progress(
                         state: ToolState::Completed,
                         panel: None,
                         display: None,
+                        images: Vec::new(),
                     })
                     .unwrap(),
                 )
@@ -159,6 +160,7 @@ fn closing_a_phase_keeps_its_header_and_final_frame_in_place(cx: &mut TestAppCon
                             state: ToolState::Completed,
                             panel: None,
                             display: None,
+                            images: Vec::new(),
                         })
                         .unwrap(),
                     )
@@ -290,6 +292,7 @@ fn work_and_phase_disclosures_finish_at_their_natural_height_after_resizing(
                         state: ToolState::Completed,
                         panel: None,
                         display: None,
+                        images: Vec::new(),
                     })
                     .unwrap(),
                 )

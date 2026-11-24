@@ -138,6 +138,9 @@ impl TranscriptView {
                 }))
                 .into_any_element();
         }
+        // The step's own thumbnails; their key keeps clear of phase strips.
+        let images = super::images::step_images(&tool, self.file_link_base.as_deref());
+        let strip = self.image_strip(usize::MAX / 2 + start, &images, cx);
         let shown = tool.presentation_in(self.file_link_base.as_deref());
         let visual = tool.visual_step().is_some();
         let failed = matches!(tool.state, ToolState::Failed | ToolState::Cancelled);
@@ -185,7 +188,10 @@ impl TranscriptView {
         let error_key = format!("tool-detail:{start}:{}", tool.id);
         let error_open = self.agent_panels.part_open(&error_key, false);
         let has_error = failed && !tool.output.trim().is_empty();
-        let has_detail = has_error || chain;
+        // What the row shows opened: the command and its output, or the diff.
+        let detail = super::tool_detail::render(&tool, cx);
+        let counts = super::tool_detail::edit_counts(&tool).filter(|(add, del)| add + del > 0);
+        let has_detail = has_error || chain || detail.is_some();
         let chips = if chain {
             let mut seen = std::collections::HashSet::new();
             let chips: Vec<_> = shown
@@ -231,6 +237,7 @@ impl TranscriptView {
             Vec::new()
         };
         let error_detail = tool.output.clone();
+        let has_detail_body = detail.is_some();
         let summary = div()
             .id(gpui::SharedString::from(format!("tool:{identity}")))
             .debug_selector(move || format!("tool-{start}"))
@@ -434,6 +441,10 @@ impl TranscriptView {
                         }),
                 ),
             )
+            .when_some(counts, |d, counts| {
+                d.child(super::tool_detail::counts_label(counts, cx))
+            })
+            .children(strip)
             .when(failed, |d| {
                 d.child(icon("close", 14.).text_color(rgb(0xff6467)).flex_shrink_0())
             })
@@ -448,7 +459,11 @@ impl TranscriptView {
                             .aria_label(format!(
                                 "{} {} for {caption}",
                                 if error_open { "Hide" } else { "Show" },
-                                if has_error { "error details" } else { "steps" }
+                                if has_error {
+                                    "error details"
+                                } else {
+                                    "details"
+                                }
                             ))
                             .p_1()
                             .child(
@@ -477,7 +492,17 @@ impl TranscriptView {
             .flex()
             .flex_col()
             .child(summary)
-            .when(chain && error_open, |d| {
+            .when_some(detail.filter(|_| error_open), |d, detail| {
+                d.child(
+                    div()
+                        .debug_selector(move || format!("tool-detail-{start}"))
+                        .w_full()
+                        .min_w_0()
+                        .pb_2()
+                        .child(detail),
+                )
+            })
+            .when(chain && error_open && !has_detail_body, |d| {
                 d.child(
                     div()
                         .debug_selector(move || format!("tool-steps-{start}"))
@@ -532,7 +557,7 @@ impl TranscriptView {
                         )),
                 )
             })
-            .when(has_error && error_open, |d| {
+            .when(has_error && error_open && !has_detail_body, |d| {
                 d.child(
                     div()
                         .min_w_0()
@@ -654,8 +679,72 @@ mod tests {
             Default::default(),
         );
         visual.run_until_parked();
-        let steps = visual.debug_bounds("tool-steps-1").expect("expanded steps");
-        assert!(steps.size.height >= px(100.));
+        // Opened, a command shows itself in full with its output, as in
+        // Claude Desktop, rather than as a list of steps.
+        let detail = visual
+            .debug_bounds("tool-detail-1")
+            .expect("command and output");
+        assert!(detail.size.height >= px(40.));
+        assert!(visual.debug_bounds("tool-steps-1").is_none());
+    }
+
+    #[gpui::test]
+    fn a_folded_group_shows_its_images_and_pointing_at_one_previews_it(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let dir = std::env::temp_dir().join(format!("mcode-strip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let picture = dir.join("sheet.png");
+        std::fs::write(&picture, b"not decoded in this test").unwrap();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| TranscriptView::new())
+            })
+            .unwrap()
+        });
+        window
+            .update(cx, |view, _, cx| {
+                let mut read = ToolCall::new("read", "Read");
+                read.input = serde_json::json!({"file_path": picture}).to_string();
+                read.state = ToolState::Completed;
+                let mut run = ToolCall::new("run", "Bash");
+                run.input = serde_json::json!({"command":"ls"}).to_string();
+                run.state = ToolState::Completed;
+                let row = |role: &str, text: String| Row {
+                    role: role.into(),
+                    text,
+                    first: true,
+                    sent_at: None,
+                };
+                view.patch(
+                    0,
+                    vec![
+                        row("user", "Look at the sheet".into()),
+                        row("tool", serde_json::to_string(&read).unwrap()),
+                        row("tool", serde_json::to_string(&run).unwrap()),
+                        row("assistant", "Done".into()),
+                    ],
+                    cx,
+                );
+                view.work_folds.insert(1, true);
+                view.phases.insert(1, false);
+                view.rebuild(0, cx);
+            })
+            .unwrap();
+        let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_resize(gpui::size(px(900.), px(600.)));
+        visual.run_until_parked();
+        let strip = visual
+            .debug_bounds("step-images-1")
+            .expect("thumbnails on the folded line");
+        let header = visual
+            .debug_bounds("transcript-image-0")
+            .expect("one thumbnail");
+        assert!(header.right() <= strip.right());
+        assert!(visual.debug_bounds("step-image-preview").is_none());
+        visual.simulate_mouse_move(header.center(), None, Default::default());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("step-image-preview").is_some());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[gpui::test]
@@ -782,7 +871,7 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(phases, [("Ran 2 commands · Explored the project", 2)]);
+                assert_eq!(phases, [("Ran 2 commands, explored the project", 2)]);
                 assert!(!view.rows.iter().any(|row| row.key.0 == 4));
                 let thought: Vec<_> = view.rows.iter().filter(|row| row.key.0 == 6).collect();
                 assert!(

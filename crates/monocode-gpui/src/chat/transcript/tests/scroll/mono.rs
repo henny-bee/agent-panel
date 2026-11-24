@@ -87,6 +87,7 @@ fn mono_turns_merge_follow_ups_hide_live_prose_and_queue_above_the_work(cx: &mut
         state: ToolState::Completed,
         panel: None,
         display: None,
+        images: Vec::new(),
     })
     .unwrap();
     view.update(cx, |view, cx| {
@@ -215,6 +216,7 @@ fn mono_document_and_session_cards_are_one_line_like_react(cx: &mut TestAppConte
         state: ToolState::Completed,
         panel: None,
         display: None,
+        images: Vec::new(),
     })
     .unwrap();
     let window = cx.update(|cx| {

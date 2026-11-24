@@ -51,13 +51,16 @@ impl Conversation {
         else {
             return false;
         };
-        if !matches!(
+        let plan = self.approvals[index].plan.is_some();
+        if !(matches!(
             decision,
             Decision::Allow | Decision::Session | Decision::Deny
-        ) || (matches!(decision, Decision::Session) && !self.approvals[index].can_remember)
+        ) || (plan && matches!(decision, Decision::AcceptPlan(_) | Decision::RevisePlan(_))))
+            || (matches!(decision, Decision::Session) && !self.approvals[index].can_remember)
         {
             return false;
         }
+        let after = decision.clone();
         let Some(controls) = &self.controls else {
             self.status = "The provider is no longer waiting for this approval".into();
             cx.notify();
@@ -75,6 +78,19 @@ impl Conversation {
             return false;
         }
         self.approvals.remove(index);
+        match after {
+            // Carry on in the access mode the plan was accepted with.
+            Decision::AcceptPlan(mode) if mode != self.settings.access => {
+                self.settings.access = mode;
+                self.save_settings(cx);
+            }
+            // The feedback went to Claude; it leaves the message box.
+            Decision::RevisePlan(text) if !text.is_empty() => {
+                self.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
+            }
+            _ => {}
+        }
         self.status = if !self.approvals.is_empty() {
             "Waiting for approval"
         } else if !self.questions.is_empty() {

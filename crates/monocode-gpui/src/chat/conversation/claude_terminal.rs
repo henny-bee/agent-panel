@@ -29,6 +29,94 @@ impl Conversation {
                         .is_some_and(|preferences| preferences.claude_terminal))
     }
 
+    /// Whether this tab shows the CLI (`Some(true)`) or the chat
+    /// (`Some(false)`); None for sessions that have only the chat.
+    pub(crate) fn claude_mode(&self, cx: &App) -> Option<bool> {
+        (Kind::from_id(&self.summary.provider) == Kind::Claude
+            && self.settings.mono.is_none()
+            && !self.is_remote())
+        .then(|| self.claude_terminal_wanted(cx))
+    }
+
+    /// Why the mode can't change now, if it can't.
+    pub(crate) fn claude_mode_blocked(&self) -> Option<&'static str> {
+        if self.switching_mode {
+            Some("Opening as chat…")
+        } else if self.busy || self.editing_last_turn.active {
+            Some("Claude is working. Switch when it finishes.")
+        } else {
+            None
+        }
+    }
+
+    /// Shows this Claude session in the CLI or as a chat. The conversation is
+    /// the same either way: the CLI resumes the chat's session, and the chat
+    /// reads what the CLI wrote.
+    pub(crate) fn switch_claude_mode(&mut self, terminal: bool, cx: &mut Context<Self>) {
+        if self.claude_mode(cx) != Some(!terminal) || self.claude_mode_blocked().is_some() {
+            return;
+        }
+        if terminal {
+            self.settings.terminal = true;
+            self.settings.chat = false;
+            self.save_settings(cx);
+            cx.emit(SessionChanged);
+            cx.notify();
+            return;
+        }
+        // Read before the CLI stops: a `/clear` or `/resume` typed in it may
+        // have moved it to another session.
+        let account = self.settings.account.clone();
+        let live = self.claude_terminal.as_ref().and_then(|state| {
+            provider::claude_live_session(&account, state.terminal.read(cx).pid())
+        });
+        let binding = live.or_else(|| self.summary.provider_id.clone());
+        // Dropping the terminal hangs up the CLI.
+        self.claude_terminal = None;
+        self.switching_mode = true;
+        let store = self.store.clone();
+        let id = self.summary.id;
+        let work = cx.background_executor().spawn(async move {
+            let rows = match binding.as_deref().and_then(|binding| {
+                provider::claude_transcript(&account, provider::claude_session(binding))
+                    .map(|path| (path, binding))
+            }) {
+                Some((path, binding)) => provider::claude_history(&path, binding)?,
+                None => Vec::new(),
+            };
+            let mut store = locked(&store)?;
+            store.replace_rows(id, &rows)?;
+            if let Some(binding) = &binding {
+                store.provider_id(id, binding)?;
+            }
+            Ok::<_, String>((binding, !rows.is_empty()))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.switching_mode = false;
+                match result {
+                    Ok((binding, has_messages)) => {
+                        this.summary.provider_id = binding;
+                        this.summary.has_messages |= has_messages;
+                        this.settings.terminal = false;
+                        this.settings.chat = true;
+                        this.settings.turns.clear();
+                        this.save_settings(cx);
+                        this.history_unloaded = true;
+                        this.reload_history(cx);
+                    }
+                    // The CLI starts again on the next frame, on the same session.
+                    Err(error) => this.status = error,
+                }
+                cx.emit(SessionChanged);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// What this session did, read from the files Claude Code writes, so only
     /// local Claude sessions have it, in the CLI or in the chat view.
     pub(crate) fn claude_activity(
@@ -64,7 +152,8 @@ impl Conversation {
     )> {
         Some((
             self.settings.account.clone(),
-            self.summary.provider_id.clone()?,
+            // A pending rewind's `?at=` suffix is not part of the file name.
+            provider::claude_session(self.summary.provider_id.as_deref()?).to_owned(),
             self.execution_cwd().to_owned(),
             self.model
                 .as_deref()
@@ -92,6 +181,18 @@ impl Conversation {
         // Saved settings name the account and whether the session began here.
         if !self.loaded {
             return Some(div().size_full().into_any());
+        }
+        if self.switching_mode {
+            return Some(
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(gpui::rgb(MUTED))
+                    .child("Opening as chat…")
+                    .into_any(),
+            );
         }
         if self.claude_terminal.is_none() {
             match self.start_claude_terminal(cx) {
@@ -177,12 +278,21 @@ impl Conversation {
         }
         // Claude saves a session with its first message; until then the id is
         // still free to start with.
-        let flag = if provider::claude_transcript(&self.settings.account, &session).is_some() {
+        // A chat rewound before switching here resumes at its cut, as a fork.
+        let (file, at) = provider::claude_resume(&session);
+        let flag = if provider::claude_transcript(&self.settings.account, file).is_some() {
             "--resume"
         } else {
             "--session-id"
         };
-        let mut args = vec![flag.into(), session.clone()];
+        let mut args = vec![flag.into(), file.to_owned()];
+        if let Some(at) = at.filter(|_| flag == "--resume") {
+            args.extend([
+                "--resume-session-at".into(),
+                at.into(),
+                "--fork-session".into(),
+            ]);
+        }
         // The model picked for the session; without one the CLI uses its own.
         if let Some(model) = &self.model {
             args.extend(["--model".into(), model.clone()]);
@@ -249,8 +359,14 @@ impl Conversation {
         if !running || self.summary.provider_id.as_deref() == Some(session) {
             return;
         }
+        // The fork a pending rewind resumes into is this same conversation.
+        let forked = self
+            .summary
+            .provider_id
+            .as_deref()
+            .is_some_and(|bound| provider::claude_resume(bound).1.is_some());
         let moved = (|| {
-            let left = match self.summary.has_messages {
+            let left = match self.summary.has_messages && !forked {
                 true => Some(self.claude_terminal_left(session)?),
                 false => None,
             };

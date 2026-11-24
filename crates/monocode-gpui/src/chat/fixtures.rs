@@ -60,6 +60,7 @@ pub(crate) fn chat() -> Transcript {
             state,
             panel: None,
             display: None,
+            images: Vec::new(),
         })
         .unwrap();
     }

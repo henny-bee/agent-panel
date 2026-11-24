@@ -24,6 +24,7 @@ pub use commands::{
 pub mod accounts;
 mod attachments;
 pub mod catalog;
+mod claude_history;
 pub mod cli;
 mod compaction;
 pub(crate) mod devin;
@@ -40,6 +41,7 @@ mod protocol;
 mod protocol_tools;
 mod questions;
 mod rewind;
+pub use claude_history::{claude_history, claude_sessions, ClaudeSession};
 pub mod skills;
 mod tasks;
 pub mod usage;
@@ -61,10 +63,9 @@ pub fn forget_session(kind: Kind, provider_id: &str, account_id: &str, cwd: &Pat
         opencode::forget_session(provider_id, account_id, cwd);
     }
 }
-pub(crate) use rewind::claude_resume;
 pub use rewind::{
-    claude_first_prompt, claude_live_session, claude_transcript, restores_files, rewind_to,
-    supports_fork, supports_rewind, RewindError,
+    claude_first_prompt, claude_live_session, claude_resume, claude_session, claude_transcript,
+    restore_files_only, restores_files, rewind_to, supports_fork, supports_rewind, RewindError,
 };
 /// An id for a Claude session that has not been started yet.
 pub fn claude_session_id() -> String {

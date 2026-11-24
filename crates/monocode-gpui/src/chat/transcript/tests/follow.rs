@@ -131,6 +131,7 @@ fn tool(ix: usize, done: bool) -> Row {
             },
             panel: None,
             display: None,
+            images: Vec::new(),
         })
         .unwrap(),
     )

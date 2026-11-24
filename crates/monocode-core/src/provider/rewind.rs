@@ -75,7 +75,7 @@ const CLAUDE_AT: &str = "?at=";
 /// Splits a Claude binding into its session and the entry a pending rewind
 /// resumes at: `s?at=e` -> `("s", Some("e"))`. Bindings saved with an older
 /// `&drops=` suffix keep working; the suffix is ignored.
-pub(crate) fn claude_resume(binding: &str) -> (&str, Option<&str>) {
+pub fn claude_resume(binding: &str) -> (&str, Option<&str>) {
     match binding.split_once(CLAUDE_AT) {
         Some((session, rest)) => (session, rest.split('&').next()),
         None => (binding, None),
@@ -98,9 +98,58 @@ fn squash(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A prompt as both sides can compare it: whitespace squashed, `@path`
+/// mentions cut to their file name (the composer sends `@src/a.rs` for the
+/// `@a.rs` it shows) and a slash command Claude saved as tags read back as
+/// `/name args`.
+fn comparable(text: &str) -> String {
+    let tag = |name: &str| {
+        let open = format!("<{name}>");
+        let start = text.find(&open)? + open.len();
+        let end = text[start..].find(&format!("</{name}>"))?;
+        Some(text[start..start + end].trim().to_owned())
+    };
+    let text = match tag("command-name") {
+        Some(name) => format!(
+            "/{} {}",
+            name.trim_start_matches('/'),
+            tag("command-args").unwrap_or_default()
+        ),
+        None => text.to_owned(),
+    };
+    text.split_whitespace()
+        .map(|word| match word.strip_prefix('@') {
+            Some(path) => format!("@{}", path.rsplit('/').next().unwrap_or(path)),
+            None => word.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether Claude's copy of a prompt is the message being cut. Claude may
+/// prepend context (MCP hints), so containment is enough.
+fn same_prompt(saved: &str, expected: &str) -> bool {
+    let expected = comparable(expected);
+    !expected.is_empty() && comparable(saved).contains(&expected)
+}
+
+/// User entries Claude writes itself: task notifications, reminders and the
+/// output of commands run inside the CLI. They are not prompts the app sent.
+const INJECTED: [&str; 9] = [
+    "<task-notification>",
+    "<system-reminder>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<user-prompt-submit-hook>",
+];
+
 /// The text of a prompt the user sent, as opposed to tool results, injected
 /// context, compaction summaries and the marker a stopped turn leaves behind.
-fn claude_prompt_text(entry: &Value) -> Option<String> {
+pub(super) fn claude_prompt_text(entry: &Value) -> Option<String> {
     if entry["type"] != "user"
         || entry["isMeta"] == true
         || entry["isCompactSummary"] == true
@@ -119,7 +168,9 @@ fn claude_prompt_text(entry: &Value) -> Option<String> {
         }
         _ => return None,
     };
-    (!text.starts_with("[Request interrupted")).then_some(text)
+    let lead = text.trim_start();
+    (!lead.starts_with("[Request interrupted") && !INJECTED.iter().any(|tag| lead.starts_with(tag)))
+        .then_some(text)
 }
 
 /// Where Claude keeps a session. It saves one only once it holds a message.
@@ -173,15 +224,20 @@ pub fn claude_first_prompt(
         .find(|text| !text.trim().is_empty() && !text.trim_start().starts_with('<'))
 }
 
+/// How far from its counted place a prompt may sit: a send that never reached
+/// Claude, or an entry it wrote itself, shifts the count by one or two.
+const DRIFT: usize = 3;
+
 /// Finds the prompt `later` prompts before the end of the active chain, which
 /// ends at `from` or else at the transcript's last entry. Returns the entry
 /// before that prompt (None when nothing precedes it) and the prompt's own id.
-/// `expected` is the message being cut at: a prompt with different text is
-/// left alone.
+/// `expected` is the message being cut at. The prompt at the counted place
+/// wins when its text matches; otherwise the nearest one within `DRIFT` whose
+/// text matches. A message without text only takes the counted place.
 fn claude_boundary(
     transcript: &str,
     expected: &str,
-    mut later: usize,
+    later: usize,
     from: Option<&str>,
 ) -> Result<(Option<String>, String), String> {
     let mut entries = HashMap::new();
@@ -208,6 +264,8 @@ fn claude_boundary(
     if let Some(from) = from {
         cursor = Some(from.to_owned());
     }
+    // Prompts on the active chain, newest first, with the entry before each.
+    let mut prompts: Vec<(String, Option<String>, &str)> = Vec::new();
     // A chain is never longer than the transcript; the bound only stops a cycle.
     for _ in 0..entries.len() {
         let Some((id, (parent, prompt))) = cursor
@@ -217,20 +275,31 @@ fn claude_boundary(
             break;
         };
         cursor = parent.clone();
-        let Some(prompt) = prompt else {
+        if let Some(prompt) = prompt {
+            prompts.push((id, parent.clone(), prompt));
+            if prompts.len() > later + DRIFT {
+                break;
+            }
+        }
+    }
+    let textless = squash(expected).is_empty();
+    let nearest = std::iter::once(later).chain((1..=DRIFT).flat_map(|step| {
+        [later.checked_sub(step), Some(later + step)]
+            .into_iter()
+            .flatten()
+    }));
+    for place in nearest {
+        let Some((id, parent, prompt)) = prompts.get(place) else {
             continue;
         };
-        if later > 0 {
-            later -= 1;
-            continue;
+        if (textless && place == later) || same_prompt(prompt, expected) {
+            return Ok((parent.clone(), id.clone()));
         }
-        if !squash(prompt).contains(&squash(expected)) {
-            return Err(
-                "Claude's saved conversation does not match this message; history was preserved"
-                    .into(),
-            );
-        }
-        return Ok((parent.clone(), id));
+    }
+    if prompts.len() > later {
+        return Err(
+            "Claude's saved conversation does not match this message; history was preserved".into(),
+        );
     }
     // A compaction starts a new chain (`parentUuid: null`) without what came
     // before it.
@@ -333,6 +402,38 @@ fn claude_rewind(
     Ok(binding)
 }
 
+/// Puts files back as they were before the prompt `request.prompt`, which has
+/// `later` prompts after it, and leaves the conversation as it is ("Code
+/// only"). Only Claude keeps checkpoints it can restore without a cut.
+pub fn restore_files_only(request: Request, later: usize) -> Result<(), RewindError> {
+    if request.kind != Kind::Claude {
+        return Err("Only Claude can restore code without rewinding the conversation".into());
+    }
+    let binding = request
+        .provider_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("The conversation has no saved provider session to restore from")?;
+    let (session, pending) = claude_resume(binding);
+    let transcript = claude_transcript(&request.settings.account, session)
+        .ok_or("Could not find the Claude conversation to restore from")?;
+    let transcript = std::fs::read_to_string(transcript)
+        .map_err(|error| format!("Could not read the Claude conversation: {error}"))?;
+    let (_, prompt) = claude_boundary(&transcript, &request.prompt, later, pending)?;
+    parked::discard_session(&request);
+    run_claude(
+        claude_rewind_files(&request, session, &prompt)?,
+        "Claude refused to restore the files",
+    )
+    .map_err(|reason| format!("Couldn't restore the code from this point. {reason}"))?;
+    Ok(())
+}
+
+/// The Claude session a binding names, without a pending rewind's entry.
+pub fn claude_session(binding: &str) -> &str {
+    claude_resume(binding).0
+}
+
 /// Cuts the provider's conversation just before the prompt `request.prompt`,
 /// which has `later` prompts after it. Runs on a worker, after the caller
 /// has reserved its conversation, and sends no prompt. Returns the binding to
@@ -352,8 +453,9 @@ pub fn rewind_to(
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support rewinding".into());
     }
-    // An attachment-only message would match any prompt.
-    if (request.kind == Kind::Claude || request.kind.is_pi()) && request.prompt.trim().is_empty() {
+    // An attachment-only message would match any prompt. Claude checks such a
+    // message by its place alone (see `claude_boundary`).
+    if request.kind.is_pi() && request.prompt.trim().is_empty() {
         return Err(format!(
             "{} finds a message by its text, and this one has none; history was preserved",
             request.kind.label()
@@ -462,7 +564,7 @@ fn fork_entry(data: &Value, expected: &str, later: usize) -> Result<String, Stri
             "Pi saved no text for this message to check it by; history was preserved".into(),
         );
     }
-    if !squash(text).contains(&squash(expected)) {
+    if !same_prompt(text, expected) {
         return Err(
             "Pi's saved conversation does not match this message; history was preserved".into(),
         );
@@ -654,9 +756,11 @@ mod tests {
         assert_eq!(at("First", 2, None).unwrap(), None);
         // A pending rewind at `x1` already ends the chain before `p2`.
         assert_eq!(at("First", 0, Some("x1")).unwrap(), None);
-        // Counting from the end must land on the message being cut.
-        assert!(at("First", 1, None).is_err());
-        assert!(at("First", 3, None).is_err());
+        // A count that is off by a prompt or two still finds the message by
+        // its text, and a text found nowhere near is refused.
+        assert_eq!(at("First", 1, None).unwrap(), None);
+        assert_eq!(at("Third", 2, None).unwrap().as_deref(), Some("i2"));
+        assert!(at("Elsewhere", 0, None).is_err());
         assert!(claude_boundary("", "First", 0, None).is_err());
         // A compaction's new chain holds nothing from before it.
         let compacted = [
@@ -670,8 +774,35 @@ mod tests {
         assert!(error.starts_with("Claude compacted this chat"));
     }
     #[test]
+    fn claude_finds_prompts_the_composer_sent_differently_and_skips_its_own_entries() {
+        let transcript = [
+            claude_line("p1", None, "user", json!("MCP context: Use the configured server x when relevant to this request.\n\nFix @src/app.rs please")),
+            claude_line("a1", Some("p1"), "assistant", json!([{"type":"text","text":"Done"}])),
+            claude_line("n1", Some("a1"), "user", json!("<task-notification>\n<task-id>1</task-id></task-notification>")),
+            claude_line("p2", Some("n1"), "user", json!("<command-message>review is running</command-message>\n<command-name>/ponytail:review</command-name>\n<command-args>the diff</command-args>")),
+            claude_line("a2", Some("p2"), "assistant", json!([{"type":"text","text":"Ok"}])),
+            claude_line("p3", Some("a2"), "user", json!([{"type":"image","source":{}}])),
+        ]
+        .join("\n");
+        let at =
+            |expected, later| claude_boundary(&transcript, expected, later, None).map(|(at, _)| at);
+        // The image-only message is found by its place alone.
+        assert_eq!(at("", 0).unwrap().as_deref(), Some("a2"));
+        // A slash command saved as tags, past a notification Claude wrote itself.
+        assert_eq!(
+            at("/ponytail:review the diff", 1).unwrap().as_deref(),
+            Some("n1")
+        );
+        // A short `@a.rs` mention the composer expanded, behind an MCP hint.
+        assert_eq!(at("Fix @app.rs please", 2).unwrap(), None);
+        // A failed send the app counted but Claude never saw shifts the count.
+        assert_eq!(at("Fix @app.rs please", 3).unwrap(), None);
+        // Empty text is only ever checked at its own place.
+        assert!(at("", 2).is_ok_and(|at| at.is_none()));
+    }
+    #[test]
     fn a_message_without_text_is_never_matched_by_text() {
-        for kind in [Kind::Claude, Kind::Pi] {
+        for kind in [Kind::Pi] {
             let request = Request {
                 kind,
                 binary: PathBuf::from("unused"),

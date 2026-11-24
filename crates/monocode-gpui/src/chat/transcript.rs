@@ -8,6 +8,7 @@ pub(crate) use history::{HistoryPager, PreparedHistory};
 mod actions;
 pub(crate) mod activity;
 mod follow;
+mod images;
 mod links;
 mod live_phase;
 mod mascot;
@@ -28,6 +29,7 @@ pub(crate) mod selection;
 mod state;
 mod streaming;
 pub(crate) mod tasks;
+pub(crate) mod tool_detail;
 mod tools;
 mod user_links;
 mod view;
@@ -181,6 +183,10 @@ enum Body {
         group: usize,
         icon: &'static str,
         active: bool,
+        /// Lines the group's edits added and removed.
+        counts: (usize, usize),
+        /// The images its steps showed, as thumbnails at the line's end.
+        images: Arc<[images::StepImage]>,
     },
     WorkLine {
         turn: usize,
@@ -503,6 +509,9 @@ pub(crate) struct TranscriptView {
     note_feedback: HashMap<usize, Result<(), String>>,
     action_anchors: HashMap<(usize, &'static str), AnchorSlot>,
     hovered_action: Option<(usize, &'static str)>,
+    /// Step thumbnails' anchors and the one pointed at, by strip and index.
+    image_anchors: HashMap<(usize, usize), AnchorSlot>,
+    hovered_image: Option<(usize, usize)>,
     /// Each work phase's tile, its own view so a hover redraws only it.
     phase_tiles: HashMap<usize, Entity<crate::chat::transcript::phase_tile::PhaseTile>>,
     /// Each reply's "worked for" tile, keyed by turn.

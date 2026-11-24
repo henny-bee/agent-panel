@@ -114,13 +114,12 @@ impl TranscriptView {
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         this.action_hover(start, action, *hovered, cx)
                     }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.streaming {
-                            cx.emit(ResponseRequest::Cut {
-                                turn: start - base,
-                                cut,
-                            })
-                        }
+                    // While a reply runs the chat refuses the cut and says why.
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(ResponseRequest::Cut {
+                            turn: start - base,
+                            cut,
+                        })
                     })),
             );
             if self.hovered_action == Some((start, action)) {

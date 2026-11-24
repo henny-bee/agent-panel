@@ -113,6 +113,7 @@ impl Protocol {
                                 && request["options"].as_array().is_some_and(|options| {
                                     options.iter().any(|o| o["kind"] == "allow_always")
                                 }),
+                            plan: None,
                         }));
                     }
                 } else {

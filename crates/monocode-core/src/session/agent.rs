@@ -25,10 +25,10 @@ impl AccessMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::ReadOnly => "Read-only",
-            Self::Supervised => "Supervised",
-            Self::AutoAcceptEdits => "Auto-accept edits",
+            Self::Supervised => "Manual",
+            Self::AutoAcceptEdits => "Accept edits",
             Self::Auto => "Auto",
-            Self::FullAccess => "Full access",
+            Self::FullAccess => "Bypass permissions",
         }
     }
     pub fn from_id(id: &str) -> Self {
@@ -222,6 +222,8 @@ pub struct Approval {
     pub title: String,
     pub detail: String,
     pub can_remember: bool,
+    /// The plan Claude proposes when it asks to leave plan mode.
+    pub plan: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub enum Decision {
@@ -231,6 +233,10 @@ pub enum Decision {
     Deny,
     Answer(Vec<Vec<String>>),
     KeepOpen,
+    /// Accept a proposed plan and carry on in this access mode.
+    AcceptPlan(AccessMode),
+    /// Keep planning: what should change, or nothing to reject the plan.
+    RevisePlan(String),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuestionOption {

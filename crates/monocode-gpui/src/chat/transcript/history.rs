@@ -436,6 +436,8 @@ impl TranscriptView {
         self.hovered_prompt = None;
         self.hovered_prompt_actions = None;
         self.action_anchors = HashMap::new();
+        self.image_anchors = HashMap::new();
+        self.hovered_image = None;
         self.outline = Default::default();
         self.reflow = Default::default();
         self.follow = Default::default();

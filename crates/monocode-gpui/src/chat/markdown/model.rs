@@ -648,20 +648,34 @@ fn blocks(events: &mut Events<'_>, until: Option<TagEnd>, depth: usize) -> Vec<B
     }
     out
 }
-/// A paragraph that is only a `visual:` image places that visual. Consumes
-/// the paragraph when it matches; leaves the events untouched otherwise.
+/// Image files a reply can show from disk by their path.
+const LOCAL_IMAGES: [&str; 7] = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"];
+
+/// A paragraph that is only a `visual:` image places that visual, and one
+/// that is only an image file on this computer (`![chart](out/chart.png)`)
+/// places that picture as `image:<path>`. Consumes the paragraph when it
+/// matches; leaves the events untouched otherwise.
 fn placed_visual(events: &mut Events<'_>) -> Option<Block> {
     let id = match events.peek()? {
-        Event::Start(Tag::Image { dest_url, .. }) => dest_url
-            .strip_prefix("visual:")
-            .filter(|id| {
-                !id.is_empty()
-                    && id.len() <= 96
-                    && id
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
-            })?
-            .to_owned(),
+        Event::Start(Tag::Image { dest_url, .. }) => match dest_url.strip_prefix("visual:") {
+            Some(id) => Some(id)
+                .filter(|id| {
+                    !id.is_empty()
+                        && id.len() <= 96
+                        && id
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+                })?
+                .to_owned(),
+            None => {
+                let path = dest_url.strip_prefix("file://").unwrap_or(dest_url);
+                let lower = path.to_ascii_lowercase();
+                (!path.contains("://")
+                    && !path.starts_with("data:")
+                    && LOCAL_IMAGES.iter().any(|ext| lower.ends_with(ext)))
+                .then(|| format!("image:{path}"))?
+            }
+        },
         _ => return None,
     };
     events.next();
