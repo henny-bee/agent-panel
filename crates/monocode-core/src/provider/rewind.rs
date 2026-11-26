@@ -802,19 +802,17 @@ mod tests {
     }
     #[test]
     fn a_message_without_text_is_never_matched_by_text() {
-        for kind in [Kind::Pi] {
-            let request = Request {
-                kind,
-                binary: PathBuf::from("unused"),
-                cwd: PathBuf::from("/project"),
-                prompt: " ".into(),
-                provider_id: Some("session".into()),
-                model: None,
-                settings: Default::default(),
-            };
-            let error = rewind_to(request, None, 0, None, false).unwrap_err();
-            assert!(error.message.contains("this one has none"));
-        }
+        let request = Request {
+            kind: Kind::Pi,
+            binary: PathBuf::from("unused"),
+            cwd: PathBuf::from("/project"),
+            prompt: " ".into(),
+            provider_id: Some("session".into()),
+            model: None,
+            settings: Default::default(),
+        };
+        let error = rewind_to(request, None, 0, None, false).unwrap_err();
+        assert!(error.message.contains("this one has none"));
         let messages = json!({"messages":[{"entryId":"e1","text":""}]});
         assert!(fork_entry(&messages, "First", 0)
             .unwrap_err()

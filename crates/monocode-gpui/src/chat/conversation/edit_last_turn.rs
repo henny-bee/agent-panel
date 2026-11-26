@@ -225,6 +225,7 @@ impl Conversation {
     /// picks "Code and conversation" or "Conversation only" instead of
     /// `action`, and "Code only" too with `code_only`. `then` gets the choice,
     /// unless cancelled.
+    #[allow(clippy::too_many_arguments)]
     fn confirm_cut(
         &mut self,
         title: &'static str,

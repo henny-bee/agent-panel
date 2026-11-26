@@ -48,14 +48,14 @@ pub(crate) fn edit_lines(call: &ToolCall) -> Option<Vec<DiffLine>> {
         }
     } else if let Some(content) = input["content"].as_str() {
         push("", content);
-    } else if let Some(patch) = ["patch", "diff", "input"]
-        .iter()
-        .find_map(|key| input[*key].as_str())
-        .filter(|text| {
-            text.lines()
-                .any(|line| line.starts_with("@@") || line.starts_with("+++"))
-        })
-    {
+    } else {
+        let patch = ["patch", "diff", "input"]
+            .iter()
+            .find_map(|key| input[*key].as_str())
+            .filter(|text| {
+                text.lines()
+                    .any(|line| line.starts_with("@@") || line.starts_with("+++"))
+            })?;
         for line in patch.lines() {
             match line.chars().next() {
                 Some('+') if !line.starts_with("+++") => lines.push(('+', line[1..].to_owned())),
@@ -64,8 +64,6 @@ pub(crate) fn edit_lines(call: &ToolCall) -> Option<Vec<DiffLine>> {
                 _ => {}
             }
         }
-    } else {
-        return None;
     }
     Some(lines)
 }
