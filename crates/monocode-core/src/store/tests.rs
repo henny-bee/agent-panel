@@ -316,3 +316,28 @@ fn wal_restart_preserves_partial_output_and_provider_context() {
         Some("thread-1")
     );
 }
+
+#[test]
+fn replacing_rows_leaves_only_the_new_ones_in_either_store() {
+    use crate::session::transcript::Transcript;
+    let rows = |texts: &[&str]| {
+        let mut t = Transcript::default();
+        for text in texts {
+            t.begin("user");
+            t.append(text);
+        }
+        t.rows
+    };
+    for shared in [false, true] {
+        let mut store = if shared {
+            Store::open_monocode(std::path::Path::new(":memory:")).unwrap()
+        } else {
+            Store::open(std::path::Path::new(":memory:")).unwrap()
+        };
+        let id = store.create("claude", "/project").unwrap().id;
+        store.write_rows(id, 0, &rows(&["a", "b", "c"])).unwrap();
+        let next = rows(&["x", "y"]);
+        store.replace_rows(id, &next).unwrap();
+        assert_eq!(store.load(id).unwrap().rows, next, "shared: {shared}");
+    }
+}

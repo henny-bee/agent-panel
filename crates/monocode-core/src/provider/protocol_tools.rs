@@ -1,5 +1,50 @@
 use super::*;
 
+/// Claude Desktop's wording: "Allow Claude to run `npm test`?".
+fn claude_title(request: &Value) -> String {
+    let tool = request["tool_name"].as_str().unwrap_or("this tool");
+    let input = &request["input"];
+    let short = |text: &str| {
+        let line = text.lines().next().unwrap_or_default().trim();
+        match line.char_indices().nth(80) {
+            Some((at, _)) => format!("{}…", &line[..at]),
+            None => line.to_owned(),
+        }
+    };
+    let file = || {
+        input["file_path"]
+            .as_str()
+            .or(input["notebook_path"].as_str())
+            .map(|path| path.rsplit('/').next().unwrap_or(path).to_owned())
+    };
+    match tool {
+        "Bash" => match input["description"].as_str().or(input["command"].as_str()) {
+            Some(what) => format!("Allow Claude to run {}?", short(what)),
+            None => "Allow Claude to run a command?".into(),
+        },
+        "Edit" | "MultiEdit" | "NotebookEdit" => match file() {
+            Some(file) => format!("Allow Claude to edit {file}?"),
+            None => "Allow Claude to edit a file?".into(),
+        },
+        "Write" => match file() {
+            Some(file) => format!("Allow Claude to write {file}?"),
+            None => "Allow Claude to write a file?".into(),
+        },
+        "WebFetch" => match input["url"].as_str() {
+            Some(url) => format!("Allow Claude to fetch {}?", short(url)),
+            None => "Allow Claude to fetch a page?".into(),
+        },
+        "WebSearch" => match input["query"].as_str() {
+            Some(query) => format!("Allow Claude to search the web for {}?", short(query)),
+            None => "Allow Claude to search the web?".into(),
+        },
+        tool => format!(
+            "Allow Claude to use {}?",
+            tool.rsplit("__").next().unwrap_or(tool)
+        ),
+    }
+}
+
 impl Protocol {
     pub(super) fn approval(
         &mut self,
@@ -12,7 +57,7 @@ impl Protocol {
     ) -> Result<(), String> {
         let id = wire.to_string();
         let title = if kind == "claude" {
-            format!("Allow {}?", request["tool_name"].as_str().unwrap_or("tool"))
+            claude_title(&request)
         } else if kind.contains("fileChange") || kind == "applyPatchApproval" {
             "Allow file changes?".into()
         } else if kind.contains("permissions") {
@@ -41,8 +86,25 @@ impl Protocol {
                 .and_then(|p| serde_json::to_string_pretty(p).ok())
                 .unwrap_or_else(|| "The agent is requesting permission to continue.".into());
         }
+        // Leaving plan mode is the user's call: Claude's plan goes to them.
+        let plan = (kind == "claude" && request["tool_name"] == "ExitPlanMode").then(|| {
+            request["input"]["plan"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        });
         self.approvals
             .insert(id.clone(), (wire, kind.into(), request));
+        if let Some(plan) = plan {
+            events.push(Event::Approval(Approval {
+                id,
+                title: "Claude proposed a plan".into(),
+                detail: String::new(),
+                can_remember: false,
+                plan: Some(plan),
+            }));
+            return Ok(());
+        }
         if self.request.settings.plan || self.request.settings.access == AccessMode::ReadOnly {
             return self.respond(
                 Control {
@@ -78,6 +140,7 @@ impl Protocol {
             title,
             detail,
             can_remember: self.request.kind != Kind::Codex && !file_change,
+            plan: None,
         }));
         Ok(())
     }
@@ -130,7 +193,10 @@ impl Protocol {
         let Some((wire, kind, request)) = self.approvals.remove(&control.id) else {
             return Ok(());
         };
-        let allow = matches!(control.decision, Decision::Allow | Decision::Session);
+        let allow = matches!(
+            control.decision,
+            Decision::Allow | Decision::Session | Decision::AcceptPlan(_)
+        );
         let session = matches!(control.decision, Decision::Session);
         if kind == "acp" {
             return acp::respond(stdin, wire, &request, control.decision);
@@ -148,10 +214,22 @@ impl Protocol {
             );
         }
         if kind == "claude" {
-            let mut response = if allow {
-                json!({"behavior":"allow","updatedInput":request["input"]})
-            } else {
-                json!({"behavior":"deny","message":"Denied by the user"})
+            let mut response = match &control.decision {
+                Decision::AcceptPlan(mode) => {
+                    // The session leaves plan mode for the mode the user picked.
+                    self.request.settings.plan = false;
+                    self.request.settings.access = *mode;
+                    json!({"behavior":"allow","updatedInput":request["input"],
+                        "updatedPermissions":[{"type":"setMode","mode":mode.claude(),"destination":"session"}]})
+                }
+                Decision::RevisePlan(feedback) if feedback.trim().is_empty() => {
+                    json!({"behavior":"deny",
+                    "message":"The user rejected this plan. Stay in plan mode and wait for their next message."})
+                }
+                Decision::RevisePlan(feedback) => json!({"behavior":"deny",
+                    "message":format!("The user wants the plan revised. Stay in plan mode, revise the plan with this feedback, then propose it again:\n\n{feedback}")}),
+                _ if allow => json!({"behavior":"allow","updatedInput":request["input"]}),
+                _ => json!({"behavior":"deny","message":"Denied by the user"}),
             };
             if session && allow {
                 if let Some(suggestions) = request.get("permission_suggestions") {
@@ -279,5 +357,34 @@ impl Protocol {
             tool.state = ToolState::Failed;
         }
         events.push(Event::Tool(tool.clone()));
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    #[test]
+    fn claude_requests_read_as_what_claude_wants_to_do() {
+        let title =
+            |tool: &str, input: Value| claude_title(&json!({"tool_name":tool,"input":input}));
+        assert_eq!(
+            title("Bash", json!({"command":"npm test"})),
+            "Allow Claude to run npm test?"
+        );
+        assert_eq!(
+            title(
+                "Bash",
+                json!({"command":"rm -rf x","description":"Clean the build"})
+            ),
+            "Allow Claude to run Clean the build?"
+        );
+        assert_eq!(
+            title("Edit", json!({"file_path":"/p/src/app.rs"})),
+            "Allow Claude to edit app.rs?"
+        );
+        assert_eq!(
+            title("mcp__github__create_issue", json!({})),
+            "Allow Claude to use create_issue?"
+        );
     }
 }

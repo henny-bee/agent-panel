@@ -252,6 +252,61 @@ fn approvals_wait_for_a_decision_and_keep_the_requested_input() {
     assert_eq!(response["response"]["response"]["updatedInput"], input);
 }
 #[test]
+fn a_plan_reaches_the_user_and_accepting_it_leaves_plan_mode() {
+    let mut claude = protocol(Kind::Claude);
+    claude.request.settings.plan = true;
+    let mut out = Vec::new();
+    let plan = json!({"plan":"1. Read the code\n2. Fix it"});
+    let request = |id: &str| json!({"type":"control_request","request_id":id,"request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":plan}});
+    let events = claude.frame(request("plan-1"), &mut out).unwrap();
+    let Event::Approval(approval) = &events[0] else {
+        panic!("expected the plan")
+    };
+    // Plan mode no longer denies the plan before the user sees it.
+    assert!(out.is_empty());
+    assert_eq!(
+        approval.plan.as_deref(),
+        Some("1. Read the code\n2. Fix it")
+    );
+    claude
+        .respond(
+            Control {
+                id: approval.id.clone(),
+                decision: Decision::RevisePlan("Add tests".into()),
+            },
+            &mut out,
+        )
+        .unwrap();
+    let response: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(response["response"]["response"]["behavior"], "deny");
+    assert!(response["response"]["response"]["message"]
+        .as_str()
+        .unwrap()
+        .ends_with("Add tests"));
+    assert!(claude.request.settings.plan);
+    out.clear();
+    let events = claude.frame(request("plan-2"), &mut out).unwrap();
+    let Event::Approval(approval) = &events[0] else {
+        panic!("expected the revised plan")
+    };
+    claude
+        .respond(
+            Control {
+                id: approval.id.clone(),
+                decision: Decision::AcceptPlan(AccessMode::AutoAcceptEdits),
+            },
+            &mut out,
+        )
+        .unwrap();
+    let response: Value = serde_json::from_slice(&out).unwrap();
+    let answer = &response["response"]["response"];
+    assert_eq!(answer["behavior"], "allow");
+    assert_eq!(answer["updatedPermissions"][0]["mode"], "acceptEdits");
+    // Later requests in this run are no longer denied as plan mode.
+    assert!(!claude.request.settings.plan);
+    assert_eq!(claude.request.settings.access, AccessMode::AutoAcceptEdits);
+}
+#[test]
 fn selected_model_effort_and_access_reach_the_codex_turn() {
     let mut p = protocol(Kind::Codex);
     p.request.model = Some("selected-model".into());

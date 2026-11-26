@@ -117,6 +117,7 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
     let mut read_calls = 0;
     let mut edit_calls = 0;
     let mut commands = 0;
+    let mut failed_commands = 0;
     let mut agents = 0;
     let mut failed_agents = 0;
     let mut others = 0;
@@ -157,7 +158,12 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
                 edits.insert(target);
             }
             "Search" | "Find" | "List" => searches += 1,
-            "Run" => commands += 1,
+            "Run" => {
+                commands += 1;
+                if tool.state == ToolState::Failed {
+                    failed_commands += 1;
+                }
+            }
             "Agent" => {
                 agents += 1;
                 if matches!(tool.state, ToolState::Failed | ToolState::Cancelled) {
@@ -219,12 +225,17 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
                     file_label(&edits)
                 ),
                 "run" => format!(
-                    "{} {}",
+                    "{} {}{}",
                     if live { "Running" } else { "Ran" },
                     if commands == 1 {
                         "a command".into()
                     } else {
                         format!("{commands} commands")
+                    },
+                    if failed_commands > 0 {
+                        format!(" ({failed_commands} failed)")
+                    } else {
+                        String::new()
                     }
                 ),
                 "visual" if charts == 0 => if live {
@@ -262,8 +273,20 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
                 ),
             }
         })
+        .enumerate()
+        // Claude Desktop's summary reads as one sentence: "Ran 5 commands,
+        // edited app.rs".
+        .map(|(ix, part)| match ix {
+            0 => part,
+            _ => {
+                let mut chars = part.chars();
+                chars.next().map_or(part.clone(), |first| {
+                    first.to_lowercase().chain(chars).collect()
+                })
+            }
+        })
         .collect::<Vec<String>>()
-        .join(" · ");
+        .join(", ");
     // React breaks equal call counts towards edit, run, agent, then research.
     let mut dominant = "terminal";
     let mut most = 0;
@@ -294,19 +317,15 @@ pub(crate) fn rail_branch(last: bool, branch: bool) -> impl IntoElement {
 pub(crate) fn rail_branch_at(last: bool, branch: bool, offset: f32) -> impl IntoElement {
     rail_from(6., last, branch, offset)
 }
-/// The rail under a work phase's tile, dropping from the tile's centre.
-pub(crate) fn tile_rail(last: bool) -> impl IntoElement {
-    rail_from(TILE_RAIL_X, last, true, 0.)
-}
 /// Where a 1px line under an activity tile starts so it is centred on the
 /// tile: half a pixel either side of its middle, which lands on whole device
 /// pixels on a 2x screen.
 pub(crate) const TILE_RAIL_X: f32 = crate::ui::tabs::tile::ACTIVITY_TILE.w / 2. - 0.5;
-/// [`tile_rail`] for a step that may not branch off it.
+/// The rail under a work phase's tile, dropping from the tile's centre.
 pub(crate) fn tile_rail_branch(last: bool, branch: bool) -> impl IntoElement {
     rail_from(TILE_RAIL_X, last, branch, 0.)
 }
-/// Children of a [`tile_rail`] start where the group's title does: past the
+/// Children of a tile rail start where the group's title does: past the
 /// tile and its gap.
 pub(crate) const TILE_RAIL_INDENT: f32 = crate::ui::tabs::tile::ACTIVITY_TILE.w + 8.;
 fn rail_from(left: f32, last: bool, branch: bool, offset: f32) -> impl IntoElement {

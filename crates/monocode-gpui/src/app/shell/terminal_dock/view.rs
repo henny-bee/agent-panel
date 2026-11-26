@@ -400,6 +400,76 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Chat | Terminal for the active local Claude session: the same
+    /// conversation shown as a chat or as the Claude Code CLI.
+    fn claude_mode_switch(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let chat = self.sessions.get(&self.workspace.active?)?.clone();
+        let (terminal, blocked) = {
+            let view = chat.read(cx);
+            (view.claude_mode(cx)?, view.claude_mode_blocked())
+        };
+        let classic = self.workspace.boxy_layout();
+        let outer = if classic { 6. } else { 10. };
+        let part = |id: &'static str, label: &'static str, on: bool, to_terminal: bool| {
+            let chat = chat.clone();
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .role(Role::Button)
+                .aria_label(label)
+                .aria_toggled(if on {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .h_full()
+                .px(px(if classic { 5. } else { 7. }))
+                .flex()
+                .items_center()
+                .rounded(px(outer - 2.))
+                .text_color(content(if on { 0.9 } else { 0.4 }))
+                .when(on, |d| d.bg(content(0.1)))
+                .when(!on && blocked.is_none(), |d| {
+                    d.cursor_pointer()
+                        .hover(|s| s.bg(content(0.06)).text_color(content(0.8)))
+                        .on_click(move |_, _, cx| {
+                            chat.update(cx, |chat, cx| chat.switch_claude_mode(to_terminal, cx))
+                        })
+                })
+                .child(label)
+        };
+        let tip: SharedString = blocked
+            .unwrap_or(if terminal {
+                "Open this session as a chat. Stops Claude Code in this tab first."
+            } else {
+                "Open this session in Claude Code. The conversation carries over."
+            })
+            .into();
+        Some(
+            div()
+                .id("footer-claude-mode")
+                .role(Role::Group)
+                .aria_label("Show Claude as")
+                .h(px(20.))
+                .p(px(2.))
+                .gap(px(1.))
+                .flex()
+                .flex_shrink_0()
+                .items_stretch()
+                .whitespace_nowrap()
+                .rounded(px(outer))
+                .bg(content(0.04))
+                .when(blocked.is_some(), |d| d.opacity(0.6))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| super::super::sidebar::project_rail::ProjectTooltip(tip.to_string()))
+                        .into()
+                })
+                .child(part("footer-claude-chat", "Chat", !terminal, false))
+                .child(part("footer-claude-terminal", "Terminal", terminal, true))
+                .into_any_element(),
+        )
+    }
+
     /// UsageFooter's right side: the running-terminal chip, else the
     /// Terminal button.
     pub(in crate::app::shell) fn terminal_footer(
@@ -414,7 +484,8 @@ impl Shell {
         let open = self.dock_open(cx);
         let classic = self.workspace.boxy_layout();
         let actions = self.actions_button(cx);
-        let has_actions = actions.is_some();
+        let mode = self.claude_mode_switch(cx);
+        let has_actions = actions.is_some() || mode.is_some();
         // The classic footer's own `px-3` and border hold these in place.
         let group = div()
             .flex()
@@ -423,6 +494,10 @@ impl Shell {
             .gap(px(FOOTER_GAP))
             .when(!classic, |d| d.mr(px(6.)).pb(px(2.)))
             .text_size(px(11.))
+            .when_some(mode, |d, mode| {
+                d.child(mode)
+                    .when(actions.is_some(), |d| d.child(footer_separator()))
+            })
             .children(actions);
         // The right panel's Terminal tab, or title bar terminal tabs, take
         // over the footer's terminal controls.

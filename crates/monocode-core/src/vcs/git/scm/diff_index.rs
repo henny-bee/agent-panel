@@ -56,7 +56,7 @@ pub(super) fn diff_stats_for(root: &Path) -> DiffStats {
             add_numstat_map(&text, &mut files);
         }
     }
-    add_untracked_map(root, &mut files);
+    add_untracked_map(root, git_run(root, UNTRACKED), &mut files);
     let mut additions = 0i64;
     let mut deletions = 0i64;
     for acc in files.values() {
@@ -80,26 +80,23 @@ pub(super) struct FileAcc {
 }
 
 pub(super) fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
-    let mut files: HashMap<String, FileAcc> = HashMap::new();
-    let mut statuses: HashMap<String, &'static str> = HashMap::new();
-
-    if let Some(text) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--no-ext-diff",
-            "--numstat",
-            "HEAD",
-            "--",
-            ".",
-        ],
-    ) {
-        add_numstat_map(&text, &mut files);
-        if let Some(names) = git_run(
-            root,
-            &[
+    // Each Git call is a process start, about 100ms on Windows. These reads
+    // don't depend on each other, so they run side by side and merge in the
+    // same order as before.
+    let (numstat, names, untracked, cached, unstaged, sync, branch, head) =
+        std::thread::scope(|s| {
+            let git = |args: &'static [&'static str]| s.spawn(move || git_run(root, args));
+            let numstat = git(&[
+                "diff",
+                "-z",
+                "--relative",
+                "--no-ext-diff",
+                "--numstat",
+                "HEAD",
+                "--",
+                ".",
+            ]);
+            let names = git(&[
                 "diff",
                 "-z",
                 "--relative",
@@ -109,11 +106,57 @@ pub(super) fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
                 "HEAD",
                 "--",
                 ".",
-            ],
-        ) {
+            ]);
+            let untracked = git(UNTRACKED);
+            let cached = git(&[
+                "diff",
+                "-z",
+                "--relative",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                "--",
+                ".",
+            ]);
+            let unstaged = git(&[
+                "diff",
+                "-z",
+                "--relative",
+                "--name-only",
+                "--no-renames",
+                "--",
+                ".",
+            ]);
+            let sync = s.spawn(move || {
+                if include_sync {
+                    sync_for(root)
+                } else {
+                    Sync::default()
+                }
+            });
+            let branch = s.spawn(|| git_branch(root));
+            let head = s.spawn(|| git_stdout(root, &["rev-parse", "HEAD"]));
+            (
+                numstat.join().unwrap(),
+                names.join().unwrap(),
+                untracked.join().unwrap(),
+                cached.join().unwrap(),
+                unstaged.join().unwrap(),
+                sync.join().unwrap(),
+                branch.join().unwrap(),
+                head.join().unwrap(),
+            )
+        });
+    let mut files: HashMap<String, FileAcc> = HashMap::new();
+    let mut statuses: HashMap<String, &'static str> = HashMap::new();
+
+    if let Some(text) = numstat {
+        add_numstat_map(&text, &mut files);
+        if let Some(names) = names {
             add_name_status(&names, &mut statuses);
         }
     } else {
+        // Without a first commit there is no HEAD to diff against.
         if let Some(text) = git_run(
             root,
             &[
@@ -175,8 +218,8 @@ pub(super) fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
             add_name_status(&names, &mut statuses);
         }
     }
-    add_untracked_map(root, &mut files);
-    mark_cached_and_unstaged(root, &mut files);
+    add_untracked_map(root, untracked, &mut files);
+    mark_cached_and_unstaged(cached, unstaged, &mut files);
 
     let mut out = Vec::with_capacity(files.len());
     let mut additions = 0i64;
@@ -205,14 +248,9 @@ pub(super) fn diff_index_with(root: &Path, include_sync: bool) -> DiffIndex {
         });
     }
     out.sort_by(|a, b| a.relative.cmp(&b.relative));
-    let sync = if include_sync {
-        sync_for(root)
-    } else {
-        Sync::default()
-    };
     DiffIndex {
-        branch: git_branch(root),
-        head: git_stdout(root, &["rev-parse", "HEAD"]),
+        branch,
+        head,
         files: out,
         additions,
         deletions,
@@ -305,11 +343,16 @@ pub(super) fn normalize_diff_path(path: &str) -> String {
     path_to_js(Path::new(path))
 }
 
-pub(super) fn add_untracked_map(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    let Some(stdout) = git_run(
-        root,
-        &["ls-files", "-o", "--exclude-standard", "-z", "--", "."],
-    ) else {
+/// Untracked files, without ignored ones.
+pub(super) const UNTRACKED: &[&str] = &["ls-files", "-o", "--exclude-standard", "-z", "--", "."];
+
+/// Adds the files of an `UNTRACKED` listing, with their line counts.
+pub(super) fn add_untracked_map(
+    root: &Path,
+    listing: Option<String>,
+    files: &mut HashMap<String, FileAcc>,
+) {
+    let Some(stdout) = listing else {
         return;
     };
     for rel in stdout.split('\0') {
@@ -350,20 +393,14 @@ pub(super) fn text_line_count(path: &Path) -> i64 {
     lines
 }
 
-pub(super) fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, FileAcc>) {
-    if let Some(names) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--cached",
-            "--name-only",
-            "--no-renames",
-            "--",
-            ".",
-        ],
-    ) {
+/// Marks the files of `diff --cached --name-only` as staged and those of
+/// `diff --name-only` as unstaged.
+pub(super) fn mark_cached_and_unstaged(
+    cached: Option<String>,
+    unstaged: Option<String>,
+    files: &mut HashMap<String, FileAcc>,
+) {
+    if let Some(names) = cached {
         for line in names.split('\0') {
             let relative = literal_diff_path(line);
             if !relative.is_empty() {
@@ -371,18 +408,7 @@ pub(super) fn mark_cached_and_unstaged(root: &Path, files: &mut HashMap<String, 
             }
         }
     }
-    if let Some(names) = git_run(
-        root,
-        &[
-            "diff",
-            "-z",
-            "--relative",
-            "--name-only",
-            "--no-renames",
-            "--",
-            ".",
-        ],
-    ) {
+    if let Some(names) = unstaged {
         for line in names.split('\0') {
             let relative = literal_diff_path(line);
             if !relative.is_empty() {

@@ -242,6 +242,7 @@ impl Conversation {
             this.clear_mode(event.0, cx)
         });
         let draft_observation = cx.observe(&input, |this, input, cx| {
+            this.sync_resume(cx);
             let content = input.read(cx).content.clone();
             let folder =
                 monocode_core::session::composer::consume_command(&content, "add-to-folder");
@@ -334,6 +335,7 @@ impl Conversation {
         perf_prompt(cx);
         Self {
             editing_last_turn: Default::default(),
+            recall: None,
             btw: None,
             btw_home: (AnchorSlot::default(), 1.),
             _btw_observer: None,
@@ -434,6 +436,8 @@ impl Conversation {
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
             claude_terminal: None,
+            switching_mode: false,
+            resume: None,
             claude_activity: None,
             worktree_name_cancel: None,
             _submission: submission,

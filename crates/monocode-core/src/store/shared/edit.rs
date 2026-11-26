@@ -1,6 +1,14 @@
 use super::*;
 use crate::store::EditSnapshot;
 
+/// Whether `seen`, the rows on screen, is what `blocks` holds. A step streamed
+/// live lacks the display details the store adds when saving it, so rows that
+/// would save without changing anything count as the same.
+fn same_rows(blocks: &[Value], seen: &[Row]) -> Result<bool, String> {
+    let saved = blocks::project(blocks)?;
+    Ok(saved == seen || blocks::project(&blocks::merge(blocks, 0, seen)?)? == saved)
+}
+
 impl Store {
     pub(in crate::store) fn shared_validate_edit_rows(
         &self,
@@ -9,7 +17,7 @@ impl Store {
         rows: &[Row],
     ) -> Result<(), String> {
         let current = self.shared_blocks(id)?;
-        if current != expected || blocks::project(&current)? != rows {
+        if current != expected || !same_rows(&current, rows)? {
             return Err("Conversation metadata changed; its history was preserved".into());
         }
         Ok(())
@@ -60,10 +68,11 @@ impl Store {
         {
             return Err("Editing a turn across a provider handoff is unavailable".into());
         }
-        let rows = blocks::project(&blocks)?;
-        if rows != expected {
+        if !same_rows(&blocks, expected)? {
             return Err("Conversation changed; reopen it before editing".into());
         }
+        // The rows the app shows, which the app compares against later.
+        let rows = expected.to_vec();
         // The user block whose first projected row is `at`.
         let mut offset = 0;
         let mut latest = None;
@@ -224,6 +233,34 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn a_live_turn_whose_step_returned_images_can_be_edited() {
+        use crate::session::{
+            tool::{ToolCall, ToolState},
+            transcript::Transcript,
+        };
+        let mut store = Store::open_monocode(Path::new(":memory:")).unwrap();
+        let id = store.create("claude", "/project").unwrap().id;
+        store.provider_id(id, "session").unwrap();
+        let mut live = Transcript::default();
+        live.begin("user");
+        live.append("what images are here");
+        let mut read = ToolCall::new("read-1", "Read");
+        read.input = json!({"file_path":"/a.png"}).to_string();
+        read.state = ToolState::Completed;
+        read.images = vec!["/cache/read-1-0.png".into()];
+        live.begin("tool");
+        live.append(&serde_json::to_string(&read).unwrap());
+        live.begin("assistant");
+        live.append("One picture.");
+        store.write_rows(id, 0, &live.rows).unwrap();
+        // Before, the saved step's extra display details made this refuse with
+        // "Conversation changed" until the chat was reopened.
+        let edit = store.prepare_edit(id, &live.rows, 0).unwrap();
+        assert!(edit.matches(&live.rows));
+        store.finish_edit(id, &edit, Some("session")).unwrap();
+        assert!(store.load(id).unwrap().rows.is_empty());
+    }
     fn fixture(blocks: Value) -> (Store, i64) {
         let store = Store::open_monocode(Path::new(":memory:")).unwrap();
         let session = store.create("codex", "/project").unwrap();

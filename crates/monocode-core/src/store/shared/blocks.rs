@@ -35,6 +35,7 @@ fn tool(block: &Value) -> ToolCall {
             "raw_output",
             "nativeInput",
             "nativePresentation",
+            "nativeImages",
         ] {
             fields.remove(key);
         }
@@ -108,6 +109,7 @@ fn tool(block: &Value) -> ToolCall {
             Some("in_progress" | "running" | "pending") => ToolState::Running,
             _ => ToolState::Completed,
         },
+        images: serde_json::from_value(meta["nativeImages"].clone()).unwrap_or_default(),
     }
 }
 fn project_content(block: &Value) -> Result<Vec<Row>, String> {
@@ -356,6 +358,11 @@ fn update(old: Option<&Value>, rows: &[Row]) -> Result<Value, String> {
         block["tool"]["nativeInput"] = json!(call.input);
         if let Some(display) = &call.display {
             block["tool"]["nativePresentation"] = display.clone();
+        }
+        // Kept so a reloaded transcript equals the live one, which edit and
+        // fork compare before cutting.
+        if !call.images.is_empty() {
+            block["tool"]["nativeImages"] = json!(call.images);
         }
         if previous
             .as_ref()
@@ -653,6 +660,22 @@ mod panel_tests {
         assert!(
             matches!(loaded.panel(), Some(Panel::Agent(AgentRun { ids, .. })) if ids == vec!["actual-child-thread"])
         );
+    }
+    #[test]
+    fn a_step_keeps_its_images_through_the_shared_store() {
+        let mut call = ToolCall::new("read-1", "Read");
+        call.input = json!({"file_path":"/a.png"}).to_string();
+        call.state = ToolState::Completed;
+        call.images = vec!["/cache/read-1-0.png".into()];
+        let merged = merge(&[], 0, &[row(&call)]).unwrap();
+        let loaded = tool(&merged[0]);
+        assert_eq!(loaded.images, call.images);
+        // Saving the reload again changes nothing, so the stored and live copies stay equal.
+        let again = merge(&merged, 0, &project(&merged).unwrap()).unwrap();
+        assert_eq!(project(&again).unwrap(), project(&merged).unwrap());
+        assert!(loaded
+            .display
+            .is_none_or(|d| d.get("nativeImages").is_none()));
     }
 }
 

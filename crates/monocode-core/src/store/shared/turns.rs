@@ -397,6 +397,24 @@ impl Store {
         Ok(())
     }
 
+    pub(in crate::store) fn shared_replace_rows(
+        &self,
+        id: i64,
+        rows: &[Row],
+    ) -> Result<(), String> {
+        self.shared_writable()?;
+        let next = blocks::merge(&[], 0, rows)?;
+        self.shared_store_blocks(id, &next)?;
+        self.shared_patch(id, &[("updated_at", json!(crate::sys::time::now_ms()))])?;
+        self.shared
+            .as_ref()
+            .unwrap()
+            .snapshots
+            .borrow_mut()
+            .insert(id, HistoryRevision::of(&next));
+        Ok(())
+    }
+
     pub(in crate::store) fn shared_write_rows(
         &self,
         id: i64,

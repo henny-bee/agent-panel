@@ -631,6 +631,26 @@ impl Shell {
         ));
         self.observations.push(cx.subscribe(
             &view,
+            move |this, _, resumed: &crate::chat::conversation::Resumed, cx| {
+                if !this.acts_for(id, cx) {
+                    return;
+                }
+                let session = resumed.0.clone();
+                if this.sessions.contains_key(&session.id) {
+                    let id = session.id;
+                    cx.spawn(async move |this, cx| {
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.activate_session(id, window, cx)
+                        });
+                    })
+                    .detach();
+                } else {
+                    this.open_fork(session, String::new(), Vec::new(), cx);
+                }
+            },
+        ));
+        self.observations.push(cx.subscribe(
+            &view,
             move |this, _, forked: &crate::chat::conversation::Forked, cx| {
                 if this.acts_for(id, cx) {
                     this.open_fork(forked.0.clone(), forked.1.clone(), forked.2.clone(), cx)

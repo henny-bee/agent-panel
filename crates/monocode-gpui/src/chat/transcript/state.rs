@@ -247,6 +247,8 @@ impl TranscriptView {
             note_feedback: HashMap::new(),
             action_anchors: HashMap::new(),
             hovered_action: None,
+            image_anchors: HashMap::new(),
+            hovered_image: None,
             phase_tiles: HashMap::new(),
             work_tiles: HashMap::new(),
             target_action: None,

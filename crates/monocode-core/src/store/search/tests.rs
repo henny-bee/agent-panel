@@ -124,6 +124,7 @@ fn live_search_finds_split_phrases_tools_and_skips_reasoning() {
             state: crate::session::tool::ToolState::Completed,
             panel: None,
             display: None,
+            images: Vec::new(),
         })
         .unwrap(),
     );

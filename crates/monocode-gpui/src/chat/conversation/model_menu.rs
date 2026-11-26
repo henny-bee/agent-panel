@@ -147,8 +147,16 @@ impl Conversation {
         if std::env::var_os("MONOCODE_NATIVE_TRACE").is_some() {
             eprintln!("native settings session={} action={id}", self.summary.id);
         }
+        if id == "mode:plan" {
+            self.toggle_mode("plan", cx);
+            return;
+        }
         if let Some(mode) = id.strip_prefix("access:") {
             self.settings.access = AccessMode::from_id(mode);
+            // Picking an access mode leaves a plan turn, chip and all.
+            if self.settings.plan {
+                self.toggle_mode("plan", cx);
+            }
             remember_access(self.settings.access, cx);
         } else if let Some(effort) = id.strip_prefix("effort:") {
             self.set_effort_choice(effort, cx);

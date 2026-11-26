@@ -356,6 +356,17 @@ impl Conversation {
                 .checked(self.settings.access == AccessMode::ReadOnly)
                 .into(),
         ];
+        // Claude Desktop lists Plan with the modes; a plan turn asks before
+        // anything changes, whatever the access below.
+        if self.settings.mono.is_none() {
+            items.push(
+                MenuAction::new("mode:plan", "Plan")
+                    .icon("list-bullet")
+                    .description("Explore and propose a plan before changing anything.")
+                    .checked(self.settings.plan)
+                    .into(),
+            );
+        }
         items.extend(ACCESS_MODES.iter().map(|(id, label, hint, glyph)| {
                     let hint = match (provider,*id) {
                         (Kind::Cursor,"supervised") => "Confirm commands using Cursor's permission policy; Cursor may accept edits automatically.",

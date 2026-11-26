@@ -351,10 +351,33 @@ impl TranscriptView {
             {
                 let group = phase.unwrap();
                 let (title, icon) = if group.calls.is_empty() {
-                    (if active { "Thinking…" } else { "Thought" }.into(), "minus")
+                    (
+                        if active {
+                            "Thinking…"
+                        } else {
+                            "Thought process"
+                        }
+                        .into(),
+                        "minus",
+                    )
                 } else {
                     crate::chat::transcript::activity::summary(&group.calls, active)
                 };
+                let counts = group
+                    .calls
+                    .iter()
+                    .filter_map(crate::chat::transcript::tool_detail::edit_counts)
+                    .fold((0, 0), |(a, d), (add, del)| (a + add, d + del));
+                let images: Arc<[_]> = group
+                    .calls
+                    .iter()
+                    .flat_map(|call| {
+                        crate::chat::transcript::images::step_images(
+                            call,
+                            self.file_link_base.as_deref(),
+                        )
+                    })
+                    .collect();
                 self.rows.push(UiRow {
                     key: (0, 0),
                     body: Body::Phase {
@@ -362,6 +385,8 @@ impl TranscriptView {
                         group: group.start,
                         icon,
                         active,
+                        counts,
+                        images,
                     },
                     message,
                     first: false,

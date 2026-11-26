@@ -1,4 +1,6 @@
 mod accounts;
+mod resume;
+pub(crate) use resume::Resumed;
 mod approvals;
 mod attachment_drop;
 mod background_tasks;
@@ -80,14 +82,14 @@ const COMPOSER_RADIUS: f32 = 12.;
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
     (
         "supervised",
-        "Supervised",
-        "Ask before commands and file changes.",
+        "Manual",
+        "Always ask before making changes.",
         "square-lock",
     ),
     (
         "auto-accept-edits",
-        "Auto-accept edits",
-        "Auto-approve edits, ask before other actions.",
+        "Accept edits",
+        "Automatically accept all file edits.",
         "pencil-edit",
     ),
     (
@@ -98,7 +100,7 @@ const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "full-access",
-        "Full access",
+        "Bypass permissions",
         "Allow commands, edits, and supported MCP confirmations in non-plan turns without prompts.",
         "shield-alert",
     ),
@@ -150,6 +152,9 @@ pub(crate) struct Forked(
 );
 pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
+    /// Which earlier message ↑ brought back into the empty composer, counting
+    /// back from the newest.
+    recall: Option<usize>,
     btw: Option<Entity<btw::Btw>>,
     /// The composer box the /btw sheet morphs out of, and how visible the
     /// composer is under the sheet.
@@ -265,6 +270,10 @@ pub(crate) struct Conversation {
     worktree_name_cancel: Option<Arc<AtomicBool>>,
     /// The Claude Code CLI shown in place of the chat.
     claude_terminal: Option<claude_terminal::State>,
+    /// A Claude session is moving between the CLI and the chat.
+    switching_mode: bool,
+    /// `/resume`'s session list while the composer holds the command.
+    resume: Option<resume::Picker>,
     /// What this Claude session did, for the agents and in-this-chat panels.
     claude_activity: Option<Entity<crate::chat::claude::panels::ClaudeActivity>>,
     _submission: Subscription,
@@ -295,6 +304,7 @@ impl EventEmitter<SessionLeft> for Conversation {}
 impl EventEmitter<ChooseFolder> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Forked> for Conversation {}
+impl EventEmitter<Resumed> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
 impl EventEmitter<composer_features::StopOrchestration> for Conversation {}

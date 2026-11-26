@@ -99,6 +99,10 @@ impl Changes {
             );
         };
         if action != FileAction::Discard {
+            let staged = action == FileAction::Stage;
+            self.git.update(cx, |git, cx| {
+                git.assume_staged(Some(&file.relative), staged, cx)
+            });
             start(self, window, cx);
             return;
         }
@@ -150,6 +154,9 @@ impl Changes {
             );
         };
         if action != FileAction::Discard {
+            let staged = action == FileAction::Stage;
+            self.git
+                .update(cx, |git, cx| git.assume_staged(None, staged, cx));
             start(self, window, cx);
             return;
         }
@@ -192,7 +199,12 @@ impl Changes {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.busy.is_some() {
+            return;
+        }
         let key = format!("{}:{relative}", if stage { "stage" } else { "unstage" });
+        self.git
+            .update(cx, |git, cx| git.assume_staged(Some(&relative), stage, cx));
         self.run_git(
             key,
             move |path| {

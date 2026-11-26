@@ -124,6 +124,7 @@ fn mono_badge_ticker_tracks_work_at_the_top_of_the_turn(cx: &mut TestAppContext)
                     state: ToolState::Running,
                     panel: None,
                     display: None,
+                    images: Vec::new(),
                 };
                 view.patch(
                     4,

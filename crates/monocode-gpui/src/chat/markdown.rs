@@ -446,7 +446,14 @@ fn rich_inline(
                             })
                             .child(crate::ui::file_icons::file_icon(&text, 14.))
                     })
-                    .child(child)
+                    // A flex item keeps its unwrapped width unless allowed to
+                    // shrink, so a long path would run past the column.
+                    .child(
+                        div()
+                            .min_w_0()
+                            .debug_selector(move || format!("rich-code-{run_ix}"))
+                            .child(child),
+                    )
                     .into_any_element(),
             );
             offset += run.text.len();

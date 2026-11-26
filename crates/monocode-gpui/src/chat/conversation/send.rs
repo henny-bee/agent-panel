@@ -87,6 +87,9 @@ impl Conversation {
             self.save_message_draft(cx);
             return;
         }
+        if self.resume_pick(cx) {
+            return;
+        }
         if !self.folder_selected
             && monocode_core::session::composer::consume_command(
                 &self.input.read(cx).content,
@@ -105,6 +108,9 @@ impl Conversation {
         if self.input.read(cx).is_composing() {
             return;
         }
+        // A sent message ends what Undo rewind can bring back.
+        self.editing_last_turn.message_sent();
+        self.recall = None;
         let raw = self
             .input
             .update(cx, |i, cx| i.take(cx))

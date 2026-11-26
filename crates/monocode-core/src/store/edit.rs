@@ -341,6 +341,48 @@ impl Store {
         fork.has_messages = edit.start > 0;
         Ok(fork)
     }
+    /// Puts back what the rewind `edit` took out of the conversation, while
+    /// nothing was sent after it: its rows, their turn receipts and the
+    /// binding from before the cut. Files stay as they are. Only a cut that
+    /// left the provider's original session alone (a fork) can be undone.
+    pub fn undo_edit(
+        &mut self,
+        id: i64,
+        edit: &EditSnapshot,
+        binding: Option<&str>,
+        turns: &std::collections::HashMap<usize, crate::session::agent::TurnInfo>,
+    ) -> Result<(), String> {
+        if self.shared.is_some() {
+            return Err("Undo rewind isn't available for this conversation".into());
+        }
+        if binding == Some(edit.provider_id.as_str()) {
+            return Err(
+                "This rewind changed the provider's own copy, so it can't be undone".into(),
+            );
+        }
+        let session = self
+            .sessions()?
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or("Conversation no longer exists")?;
+        if session.provider_id.as_deref() != binding
+            || self.load(id)?.rows != edit.rows[..edit.start]
+        {
+            return Err("Couldn't undo this rewind because a message was sent after it".into());
+        }
+        self.write_rows(id, edit.start, &edit.rows[edit.start..])?;
+        self.provider_id(id, &edit.provider_id)?;
+        if let Some(mut settings) = self.agent_settings(id)? {
+            settings.turns.extend(
+                turns
+                    .iter()
+                    .filter(|(row, _)| **row >= edit.start)
+                    .map(|(row, info)| (*row, info.clone())),
+            );
+            self.save_agent_settings(id, &settings)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +432,26 @@ mod tests {
             store.sessions().unwrap()[0].provider_id.as_deref(),
             Some("fork")
         );
+    }
+    #[test]
+    fn undo_brings_back_a_forked_cut_until_a_message_is_sent() {
+        let (mut store, id, rows) = fixture();
+        let turns = store.agent_settings(id).unwrap().unwrap().turns;
+        let edit = store.prepare_edit(id, &rows, 2).unwrap();
+        store.finish_edit(id, &edit, Some("fork")).unwrap();
+        store.undo_edit(id, &edit, Some("fork"), &turns).unwrap();
+        assert_eq!(store.load(id).unwrap().rows, rows);
+        assert_eq!(
+            store.sessions().unwrap()[0].provider_id.as_deref(),
+            Some("thread")
+        );
+        let restored = store.agent_settings(id).unwrap().unwrap().turns;
+        assert_eq!(restored[&3].provider_turn_id.as_deref(), Some("turn"));
+        // A message sent after the rewind, or a cut made in place, stays.
+        store.finish_edit(id, &edit, Some("fork")).unwrap();
+        store.write_rows(id, 2, &rows[2..3]).unwrap();
+        assert!(store.undo_edit(id, &edit, Some("fork"), &turns).is_err());
+        assert!(store.undo_edit(id, &edit, Some("thread"), &turns).is_err());
     }
     #[test]
     fn a_cut_at_the_first_message_empties_the_chat_and_drops_the_binding() {
