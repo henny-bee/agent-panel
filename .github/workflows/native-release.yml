@@ -1,4 +1,4 @@
-name: Native preview release
+name: MCode release
 
 on:
   push:
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build:
-    name: Native preview (${{ matrix.target }})
+    name: MCode (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -178,7 +178,7 @@ jobs:
           rm -f "$RUNNER_TEMP/native-signing.p12" "$RUNNER_TEMP/native-notary.p8"
 
   rpm:
-    name: Native preview (Enterprise Linux rpm)
+    name: MCode (Enterprise Linux rpm)
     runs-on: ubuntu-latest
     container: almalinux:10
     env:
@@ -222,7 +222,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish native preview and its update feed
+    name: Publish MCode and its update feed
     needs: [build, rpm]
     runs-on: macos-latest
     permissions:
@@ -263,7 +263,7 @@ jobs:
           MONOCODE_NATIVE_VERSION="${GITHUB_REF_NAME#native-v}" node scripts/native-release.mjs native-dist
       - name: Verify the signed feed and all packages with the native client
         run: cargo run --locked --manifest-path crates/monocode-gpui/Cargo.toml -p monocode-core --example verify_native_update --profile native-dev -- native-dist
-      - name: Publish native preview assets
+      - name: Publish MCode assets
         run: |
           set -euo pipefail
           ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
