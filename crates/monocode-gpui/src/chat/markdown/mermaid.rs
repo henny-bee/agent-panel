@@ -185,7 +185,12 @@ fn diagram_svg(source: &str, dark: bool) -> Result<(String, f32, f32), String> {
     }
     let mut theme = if dark { Theme::dark() } else { Theme::modern() };
     theme.background = "transparent".into();
-    theme.font_family = format!("{}, monospace", crate::ui::fonts::mono());
+    // The renderer maps generic `monospace` to Courier New, which Linux rarely has.
+    theme.font_family = format!(
+        "{}, {}, monospace",
+        crate::ui::fonts::mono(),
+        crate::ui::fonts::MONO_CANDIDATES.join(", ")
+    );
     let config = LayoutConfig::default();
     let layout = compute_layout(&parsed.graph, &theme, &config);
     if let mermaid_rs_renderer::layout::DiagramData::Error(error) = &layout.diagram {
