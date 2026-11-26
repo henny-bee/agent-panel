@@ -33,6 +33,10 @@ pub struct CheckpointFile {
     pub exact: bool,
     /// False when restoring could overwrite a change made outside this session.
     pub undoable: bool,
+    /// The recorded before and after snapshots, which never change: an
+    /// unchanged version means an unchanged diff.
+    #[serde(skip)]
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -233,7 +237,13 @@ impl Store {
             .filter(|change| !turn.shared || turn.edited.contains(&change.relative))
             .map(|change| {
                 let undoable = can_restore && restorable(&root, &change);
+                let oid = |blob: &Option<Blob>| {
+                    blob.as_ref()
+                        .map_or_else(String::new, |b| format!("{} {}", b.mode, b.oid))
+                };
+                let version = format!("{}>{}", oid(&change.before), oid(&change.after));
                 CheckpointFile {
+                    version,
                     path: path_to_js(&root.join(&change.relative)),
                     relative: change.relative,
                     status: change.status,

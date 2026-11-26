@@ -270,6 +270,8 @@ pub(crate) struct Conversation {
     worktree_name_cancel: Option<Arc<AtomicBool>>,
     /// The Claude Code CLI shown in place of the chat.
     claude_terminal: Option<claude_terminal::State>,
+    /// A CLI start still looking things up (Ok), or why the last one failed.
+    claude_start: Option<Result<gpui::Task<()>, String>>,
     /// A Claude session is moving between the CLI and the chat.
     switching_mode: bool,
     /// `/resume`'s session list while the composer holds the command.

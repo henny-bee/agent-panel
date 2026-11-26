@@ -336,6 +336,17 @@ type Listed = (Vec<ChangedFile>, Option<HashMap<String, FileDiffVersion>>);
 fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
     let store = monocode_core::vcs::checkpoint::store().ok_or("Session changes are unavailable")?;
     let status = store.exclusive(|s| s.status(&session.to_string(), cwd))?;
+    // Unchanged snapshots skip the reload, as the Changes tab's index IDs do.
+    let versions = status
+        .files
+        .iter()
+        .map(|f| {
+            (
+                f.relative.clone(),
+                FileDiffVersion::recorded(f.version.clone()),
+            )
+        })
+        .collect();
     Ok((
         status
             .files
@@ -350,7 +361,7 @@ fn session_files(cwd: &str, session: i64) -> Result<Listed, String> {
                 unstaged: true,
             })
             .collect(),
-        None,
+        Some(versions),
     ))
 }
 fn session_file_diff(cwd: &str, session: i64, relative: &str) -> Result<FileDiff, String> {

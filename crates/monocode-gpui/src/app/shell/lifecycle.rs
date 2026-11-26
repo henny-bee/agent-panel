@@ -151,8 +151,11 @@ impl Shell {
         let git = cx.new(|cx| crate::runtime::git_status::ProjectGit::new(git_project, cx));
         let git_observation = cx.observe(&git, |this, git, cx| {
             let cwd = git.read(cx).root.clone();
-            for view in this.sessions.values() {
-                if view.read(cx).review.read(cx).session().1 == cwd {
+            // Each chat costs several git calls; hidden ones catch up when
+            // shown (`update_chat_visibility`).
+            let shown = this.shown_anywhere(this.shown.clone(), cx);
+            for (id, view) in &this.sessions {
+                if shown.contains(id) && view.read(cx).review.read(cx).session().1 == cwd {
                     view.update(cx, |view, cx| view.refresh_git_actions(cx));
                 }
             }
@@ -171,10 +174,16 @@ impl Shell {
             |this, git, _: &crate::runtime::git_status::GitChanged, cx| {
                 let cwd = git.read(cx).root.clone();
                 let branch = git.read(cx).index.as_ref().and_then(|i| i.branch.clone());
-                for view in this.sessions.values() {
+                // Only chats on screen reread; their checkpoint reads queue
+                // behind one lock that sending a message also waits for.
+                let shown = this.shown_anywhere(this.shown.clone(), cx);
+                for (id, view) in &this.sessions {
                     if view.read(cx).review.read(cx).session().1 == cwd {
+                        let shown = shown.contains(id);
                         view.update(cx, |view, cx| {
-                            view.review.update(cx, |review, cx| review.refresh(cx));
+                            if shown {
+                                view.review.update(cx, |review, cx| review.refresh(cx));
+                            }
                             view.follow_branch(branch.as_deref(), cx);
                         });
                     }

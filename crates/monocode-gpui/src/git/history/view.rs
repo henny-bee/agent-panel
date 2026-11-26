@@ -230,8 +230,8 @@ impl History {
                                     )
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.open = !this.open;
-                                        if this.open && this.code {
-                                            this.load_languages(cx);
+                                        if this.open {
+                                            this.refresh(cx);
                                         }
                                         cx.notify();
                                     })),

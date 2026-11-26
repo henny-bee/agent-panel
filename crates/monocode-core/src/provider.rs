@@ -163,6 +163,27 @@ pub fn resolve_auto(kind: Kind) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(key).filter(|s| !s.is_empty()) {
         return Some(path.into());
     }
+    // ponytail: a found CLI is kept while it exists, so a newer install
+    // earlier on the search path shows after a restart; a missing one is
+    // searched for on every call.
+    let known = FOUND
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .cloned();
+    if let Some((_, path)) = known.filter(|(_, path)| executable(path)) {
+        return Some(path);
+    }
+    let found = search(kind)?;
+    let mut cache = FOUND.lock().unwrap();
+    cache.retain(|(k, _)| *k != kind);
+    cache.push((kind, found.clone()));
+    Some(found)
+}
+/// Each CLI `resolve_auto` found; the search stats hundreds of paths.
+static FOUND: Mutex<Vec<(Kind, PathBuf)>> = Mutex::new(Vec::new());
+fn search(kind: Kind) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Some(std::ffi::OsString::from(
         crate::vcs::git::scm::launch_env::gui_search_path(),
     ))

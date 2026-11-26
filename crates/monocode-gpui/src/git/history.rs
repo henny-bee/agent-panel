@@ -167,13 +167,14 @@ impl History {
             cx.notify();
         }
     }
-    /// Reread whatever the section shows: the languages or the commits.
+    /// Reread whatever the section shows: the languages or the commits. A
+    /// collapsed GRAPH section shows neither, and opening it reads again.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.code {
             if self.open {
                 self.load_languages(cx);
             }
-        } else {
+        } else if !self.section || self.open {
             self.load(cx);
         }
     }
