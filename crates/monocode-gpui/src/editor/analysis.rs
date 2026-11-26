@@ -2,10 +2,15 @@
 //! parsers and editorLint.ts run in a bounded interpreter on a background worker.
 //! Languages with a Tree-sitter grammar are analysed natively by editor_syntax.
 use gpui::SharedString;
-use rquickjs::{Context, Function, Promise, Runtime};
+use rquickjs::{Context, Ctx, Function, Promise, Runtime};
 use serde::Deserialize;
 use std::{
     ops::Range,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -84,14 +89,113 @@ fn byte(source: &str, offset: usize) -> usize {
 fn utf16(source: &str, at: usize) -> usize {
     source[..at].encode_utf16().count()
 }
-fn runtime() -> Result<(Runtime, Context), String> {
+/// The script an engine has loaded.
+#[derive(Clone, Copy)]
+enum Bundle {
+    Editor,
+    Format,
+}
+impl Bundle {
+    fn source(self) -> &'static str {
+        match self {
+            Bundle::Editor => include_str!("../../assets/native-editor.js"),
+            Bundle::Format => include_str!("../../assets/native-format.js"),
+        }
+    }
+}
+/// The memory, stack and time one call may use.
+#[derive(Clone, Copy)]
+struct Limits {
+    memory: usize,
+    stack: usize,
+    time: Duration,
+}
+const CALL: Limits = Limits {
+    memory: 256 * 1024 * 1024,
+    stack: 4 * 1024 * 1024,
+    time: Duration::from_secs(3),
+};
+type Engine = (Runtime, Context);
+type Job = Box<dyn FnOnce(&mut [Option<Engine>; 2]) + Send>;
+
+/// A runtime with `bundle` evaluated, which is most of a cold call's time.
+fn load(bundle: Bundle) -> Result<Engine, String> {
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
-    runtime.set_memory_limit(256 * 1024 * 1024);
-    runtime.set_max_stack_size(4 * 1024 * 1024);
-    let deadline = Instant::now() + Duration::from_secs(3);
-    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
-    Ok((runtime, context))
+    let engine = (runtime, context);
+    execute(&engine, CALL, |ctx| {
+        ctx.eval::<(), _>(bundle.source()).map(|()| String::new())
+    })?;
+    Ok(engine)
+}
+fn execute(
+    (runtime, context): &Engine,
+    limits: Limits,
+    job: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<String>,
+) -> Result<String, String> {
+    runtime.set_memory_limit(limits.memory);
+    runtime.set_max_stack_size(limits.stack);
+    let deadline = Instant::now() + limits.time;
+    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
+    context.with(job).map_err(|e| e.to_string())
+}
+/// The shared engine is in use.
+static BUSY: AtomicBool = AtomicBool::new(false);
+/// The thread that keeps one loaded engine per bundle between calls.
+static SHARED: OnceLock<Sender<Job>> = OnceLock::new();
+
+/// Runs `job` with `bundle` loaded. Calls reuse one engine on a thread of
+/// its own; one that fails is dropped, so the next call loads afresh.
+fn call(
+    bundle: Bundle,
+    limits: Limits,
+    job: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<String> + Send + 'static,
+) -> Result<String, String> {
+    // Waiting on the shared engine could mean waiting out a long analysis;
+    // a one-off engine on this thread answers now instead.
+    if BUSY.swap(true, Ordering::Acquire) {
+        return execute(&load(bundle)?, limits, job);
+    }
+    let shared = SHARED.get_or_init(|| {
+        let (jobs, queue) = mpsc::channel::<Job>();
+        // The thread's stack holds the largest JS stack a call may use.
+        let _ = std::thread::Builder::new()
+            .name("editor-js".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || {
+                let mut engines = [None, None];
+                for job in queue {
+                    job(&mut engines);
+                }
+            });
+        jobs
+    });
+    let (reply, answer) = mpsc::channel();
+    let sent = shared.send(Box::new(move |engines: &mut [Option<Engine>; 2]| {
+        let slot = &mut engines[bundle as usize];
+        let result = match slot.take() {
+            Some(engine) => Ok(engine),
+            None => load(bundle),
+        }
+        .and_then(|engine| {
+            let result = execute(&engine, limits, job);
+            if result.is_ok() {
+                *slot = Some(engine);
+            }
+            result
+        });
+        let _ = reply.send(result);
+    }));
+    // Without the thread (it could not start, or a job panicked) the job
+    // runs here on engines of its own.
+    if let Err(mpsc::SendError(job)) = sent {
+        job(&mut [None, None]);
+    }
+    let result = answer
+        .recv()
+        .unwrap_or_else(|_| Err("The editor engine stopped".into()));
+    BUSY.store(false, Ordering::Release);
+    result
 }
 pub(crate) fn complete(
     path: &str,
@@ -99,16 +203,13 @@ pub(crate) fn complete(
     at: usize,
     explicit: bool,
 ) -> Result<Vec<Completion>, String> {
-    let (_runtime, context) = runtime()?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../../assets/native-editor.js"))?;
-            let function: Function = ctx.globals().get("monocodeComplete")?;
-            function
-                .call::<_, Promise>((path, source, utf16(source, at), explicit))?
-                .finish()
-        })
-        .map_err(|e| e.to_string())?;
+    let (path, text, at16) = (path.to_owned(), source.to_owned(), utf16(source, at));
+    let json = call(Bundle::Editor, CALL, move |ctx| {
+        let function: Function = ctx.globals().get("monocodeComplete")?;
+        function
+            .call::<_, Promise>((path, text, at16, explicit))?
+            .finish()
+    })?;
     let mut options: Vec<Completion> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     for option in &mut options {
         option.from = byte(source, option.from);
@@ -125,14 +226,18 @@ pub(crate) fn search(
     word: bool,
     regex: bool,
 ) -> Result<SearchResult, String> {
-    let (_runtime, context) = runtime()?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../../assets/native-editor.js"))?;
-            let function: Function = ctx.globals().get("monocodeSearch")?;
-            function.call((source, query, replacement, case, word, regex))
-        })
-        .map_err(|e| e.to_string())?;
+    let args = (
+        source.to_owned(),
+        query.to_owned(),
+        replacement.to_owned(),
+        case,
+        word,
+        regex,
+    );
+    let json = call(Bundle::Editor, CALL, move |ctx| {
+        let function: Function = ctx.globals().get("monocodeSearch")?;
+        function.call(args)
+    })?;
     let mut result: SearchResult = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     // Convert all positions in one pass, including large replace-all results.
     let offsets = byte_offsets(source);
@@ -149,62 +254,38 @@ pub(crate) fn chunk_action(
     selection: Range<usize>,
     stage: bool,
 ) -> Result<Option<String>, String> {
-    let (_runtime, context) = runtime()?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../../assets/native-editor.js"))?;
-            let function: Function = ctx.globals().get("monocodeChunkAction")?;
-            function.call((
-                original,
-                current,
-                utf16(current, at),
-                utf16(current, selection.start),
-                utf16(current, selection.end),
-                stage,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
+    let args = (
+        original.to_owned(),
+        current.to_owned(),
+        utf16(current, at),
+        utf16(current, selection.start),
+        utf16(current, selection.end),
+        stage,
+    );
+    let json = call(Bundle::Editor, CALL, move |ctx| {
+        let function: Function = ctx.globals().get("monocodeChunkAction")?;
+        function.call(args)
+    })?;
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 pub(crate) fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "monocodeFormat",
-        path,
-        source,
-        at,
-        include_str!("../../assets/native-format.js"),
-    )
+    transform("monocodeFormat", path, source, at, Bundle::Format)
 }
 pub(crate) fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "monocodeEmmet",
-        path,
-        source,
-        at,
-        include_str!("../../assets/native-editor.js"),
-    )
+    transform("monocodeEmmet", path, source, at, Bundle::Editor)
 }
 fn transform(
-    name: &str,
+    name: &'static str,
     path: &str,
     source: &str,
     at: usize,
-    bundle: &str,
+    bundle: Bundle,
 ) -> Result<Option<Formatted>, String> {
-    let (_runtime, context) = runtime()?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(bundle)?;
-            let function: Function = ctx.globals().get(name)?;
-            if name == "monocodeFormat" || name == "monocodeEmmet" {
-                function
-                    .call::<_, Promise>((path, source, utf16(source, at)))?
-                    .finish()
-            } else {
-                function.call((path, source, utf16(source, at)))
-            }
-        })
-        .map_err(|e| e.to_string())?;
+    let args = (path.to_owned(), source.to_owned(), utf16(source, at));
+    let json = call(bundle, CALL, move |ctx| {
+        let function: Function = ctx.globals().get(name)?;
+        function.call::<_, Promise>(args)?.finish()
+    })?;
     let mut result: Option<Formatted> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     if let Some(result) = &mut result {
         result.cursor = byte(&result.formatted, result.cursor);
@@ -356,9 +437,6 @@ pub(crate) fn analyze(
     source: &str,
     original: Option<&str>,
 ) -> Result<Analysis, String> {
-    let runtime = Runtime::new().map_err(|e| e.to_string())?;
-    runtime.set_memory_limit(64 * 1024 * 1024);
-    runtime.set_max_stack_size(2 * 1024 * 1024);
     // A headless worker must finish parsing the whole document. A fixed two
     // seconds interrupts large TSX files (and their diff baseline) before the
     // complete tree can be published. Keep small requests short and all work
@@ -368,19 +446,20 @@ pub(crate) fn analyze(
             .filter(|original| *original != source)
             .map_or(0, str::len),
     );
-    let budget = Duration::from_secs(bytes.div_ceil(64 * 1024).clamp(2, 30) as u64);
-    let deadline = Instant::now() + budget;
-    runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
-    let context = Context::full(&runtime).map_err(|e| e.to_string())?;
-    let json = context
-        .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../../assets/native-editor.js"))?;
-            let function: Function = ctx.globals().get("monocodeAnalyze")?;
-            function
-                .call::<_, Promise>((path, source, original))?
-                .finish()
-        })
-        .map_err(|e| e.to_string())?;
+    let limits = Limits {
+        memory: 64 * 1024 * 1024,
+        stack: 2 * 1024 * 1024,
+        time: Duration::from_secs(bytes.div_ceil(64 * 1024).clamp(2, 30) as u64),
+    };
+    let args = (
+        path.to_owned(),
+        source.to_owned(),
+        original.map(str::to_owned),
+    );
+    let json = call(Bundle::Editor, limits, move |ctx| {
+        let function: Function = ctx.globals().get("monocodeAnalyze")?;
+        function.call::<_, Promise>(args)?.finish()
+    })?;
     let mut analysis: Analysis = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     // CodeMirror offsets are UTF-16, while native selection/IME uses UTF-8.
     let offsets = byte_offsets(source);
@@ -503,6 +582,12 @@ mod parity_tests {
         let result = emmet("a.tsx", ".container>span", 15).unwrap().unwrap();
         assert!(result.formatted.contains("className=\"container\""));
         assert!(result.formatted[result.cursor..].starts_with("</span>"));
+    }
+    #[test]
+    fn a_failed_call_leaves_the_next_one_working() {
+        assert!(transform("monocodeMissing", "a.tsx", "", 0, Bundle::Editor).is_err());
+        let result = emmet("a.tsx", ".container>span", 15).unwrap().unwrap();
+        assert!(result.formatted.contains("className=\"container\""));
     }
     #[test]
     fn completions_snippets_and_folds_use_the_frontend_languages() {
