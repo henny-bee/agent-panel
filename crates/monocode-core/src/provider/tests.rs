@@ -411,3 +411,18 @@ mod text;
 
 #[cfg(all(test, unix))]
 mod process;
+
+#[test]
+fn a_found_cli_is_kept_only_while_it_exists() {
+    let remember = |path: &Path| {
+        let mut found = FOUND.lock().unwrap();
+        found.retain(|(kind, _)| *kind != Kind::Fx);
+        found.push((Kind::Fx, path.to_owned()));
+    };
+    let running = std::env::current_exe().unwrap();
+    remember(&running);
+    assert_eq!(resolve_auto(Kind::Fx), Some(running.clone()));
+    let gone = running.with_file_name("no-such-cli");
+    remember(&gone);
+    assert_ne!(resolve_auto(Kind::Fx), Some(gone));
+}

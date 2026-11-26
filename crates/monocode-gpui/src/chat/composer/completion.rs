@@ -317,9 +317,11 @@ impl Completion {
         }
         let text = self.expand_mentions(text);
         let text = monocode_core::provider::native_prompt(self.provider, &text);
+        // Only a message naming a note waits for the shared store's lock.
         let text = self
             .store
             .as_ref()
+            .filter(|_| !monocode_core::session::notes::slugs_in_text(&text).is_empty())
             .and_then(|store| crate::runtime::locked(store).ok())
             .and_then(|store| store.apply_notes_to_turn(&text).ok())
             .unwrap_or(text);

@@ -71,8 +71,9 @@ impl Conversation {
             provider::claude_live_session(&account, state.terminal.read(cx).pid())
         });
         let binding = live.or_else(|| self.summary.provider_id.clone());
-        // Dropping the terminal hangs up the CLI.
+        // Dropping the terminal hangs up the CLI; dropping a start cancels it.
         self.claude_terminal = None;
+        self.claude_start = None;
         self.switching_mode = true;
         let store = self.store.clone();
         let id = self.summary.id;
@@ -182,34 +183,33 @@ impl Conversation {
         if !self.loaded {
             return Some(div().size_full().into_any());
         }
+        let note = |text: SharedString| {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .items_center()
+                .justify_center()
+                .text_color(gpui::rgb(MUTED))
+                .child(text)
+        };
         if self.switching_mode {
-            return Some(
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(gpui::rgb(MUTED))
-                    .child("Opening as chat…")
-                    .into_any(),
-            );
+            return Some(note("Opening as chat…".into()).into_any());
         }
         if self.claude_terminal.is_none() {
-            match self.start_claude_terminal(cx) {
-                Ok(state) => self.claude_terminal = Some(state),
-                Err(error) => {
+            match &self.claude_start {
+                None => self.begin_claude_terminal(cx),
+                Some(Ok(_)) => {}
+                Some(Err(error)) => {
                     return Some(
-                        div()
-                            .size_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(gpui::rgb(MUTED))
-                            .child(error)
+                        note(error.clone().into())
+                            .child(Self::claude_restart("Try again", cx))
                             .into_any(),
                     );
                 }
             }
+            return Some(note("Opening Claude Code…".into()).into_any());
         }
         let terminal = self.claude_terminal.as_ref()?.terminal.clone();
         // The composer is not shown, so focus meant for it belongs to the CLI.
@@ -227,34 +227,78 @@ impl Conversation {
                 .when(exited, |d| {
                     d.child(
                         div()
-                            .id("restart-claude-terminal")
                             .absolute()
                             .bottom_3()
                             .right_3()
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(gpui::rgb(MUTED))
-                            .text_color(gpui::rgb(TEXT))
-                            .cursor_pointer()
-                            .child("Restart Claude Code")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.claude_terminal = None;
-                                // The next render hands this focus to the new terminal.
-                                window.focus(&this.input.focus_handle(cx), cx);
-                                cx.notify();
-                            })),
+                            .child(Self::claude_restart("Restart Claude Code", cx)),
                     )
                 })
                 .into_any(),
         )
     }
 
-    fn start_claude_terminal(&mut self, cx: &mut Context<Self>) -> Result<State, String> {
-        let binary = provider::resolve(Kind::Claude)
-            .ok_or("The Claude Code executable was not found. Set it in Settings, Providers.")?;
+    /// Starts the CLI over, after it exits or after a start that failed.
+    fn claude_restart(label: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("restart-claude-terminal")
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(gpui::rgb(MUTED))
+            .text_color(gpui::rgb(TEXT))
+            .cursor_pointer()
+            .child(label)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.claude_terminal = None;
+                this.claude_start = None;
+                // The next render hands this focus to the new terminal.
+                window.focus(&this.input.focus_handle(cx), cx);
+                cx.notify();
+            }))
+    }
+
+    /// Finding the CLI scans every PATH folder and finding the transcript
+    /// every Claude project folder, so both run off the UI thread.
+    fn begin_claude_terminal(&mut self, cx: &mut Context<Self>) {
+        // The account decides which projects folder holds the transcript.
         self.attach_account(cx);
+        let account = self.settings.account.clone();
+        let file = self
+            .summary
+            .provider_id
+            .as_deref()
+            .map(|session| provider::claude_resume(session).0.to_owned());
+        let lookup = cx.background_executor().spawn(async move {
+            let binary = provider::resolve(Kind::Claude);
+            let saved =
+                file.is_some_and(|file| provider::claude_transcript(&account, &file).is_some());
+            (binary, saved)
+        });
+        self.claude_start = Some(Ok(cx.spawn(async move |this, cx| {
+            let (binary, saved) = lookup.await;
+            let _ = this.update(cx, |this, cx| {
+                this.claude_start = match this.start_claude_terminal(binary, saved, cx) {
+                    Ok(state) => {
+                        this.claude_terminal = Some(state);
+                        None
+                    }
+                    Err(error) => Some(Err(error)),
+                };
+                cx.notify();
+            });
+        })));
+    }
+
+    /// `saved`: Claude already wrote this session's transcript.
+    fn start_claude_terminal(
+        &mut self,
+        binary: Option<std::path::PathBuf>,
+        saved: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<State, String> {
+        let binary = binary
+            .ok_or("The Claude Code executable was not found. Set it in Settings, Providers.")?;
         let mut account = std::process::Command::new(&binary);
         self.settings.account.apply(Kind::Claude, &mut account)?;
         let env = account
@@ -280,11 +324,7 @@ impl Conversation {
         // still free to start with.
         // A chat rewound before switching here resumes at its cut, as a fork.
         let (file, at) = provider::claude_resume(&session);
-        let flag = if provider::claude_transcript(&self.settings.account, file).is_some() {
-            "--resume"
-        } else {
-            "--session-id"
-        };
+        let flag = if saved { "--resume" } else { "--session-id" };
         let mut args = vec![flag.into(), file.to_owned()];
         if let Some(at) = at.filter(|_| flag == "--resume") {
             args.extend([
@@ -438,6 +478,7 @@ impl Conversation {
         self.cancel_title_generation();
         // A CLI of its own would still be on the conversation the tab took.
         self.claude_terminal = None;
+        self.claude_start = None;
         self.summary.title = summary.title;
         self.summary.provider_id = summary.provider_id;
         self.summary.has_messages = summary.has_messages;

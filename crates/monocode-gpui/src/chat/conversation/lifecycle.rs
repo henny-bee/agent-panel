@@ -436,6 +436,7 @@ impl Conversation {
             cancel: Arc::new(AtomicBool::new(false)),
             title_cancel: None,
             claude_terminal: None,
+            claude_start: None,
             switching_mode: false,
             resume: None,
             claude_activity: None,

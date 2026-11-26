@@ -831,3 +831,27 @@ fn the_mode_switch_moves_a_claude_session_between_the_cli_and_the_chat(cx: &mut 
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn the_cli_is_looked_up_away_from_the_ui_thread(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |c, window, cx| {
+            c.loaded = true;
+            c.settings.terminal = true;
+            assert!(c.claude_terminal(window, cx).is_some());
+            assert!(c.claude_terminal.is_none() && matches!(c.claude_start, Some(Ok(_))));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |c, _, _| {
+            // Started, or kept why it could not for Try again.
+            assert!(!matches!(c.claude_start, Some(Ok(_))));
+            assert_ne!(
+                c.claude_terminal.is_some(),
+                matches!(c.claude_start, Some(Err(_)))
+            );
+        })
+        .unwrap();
+}
