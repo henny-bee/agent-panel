@@ -77,6 +77,8 @@ pub(crate) struct ProjectGit {
     clock: u64,
     in_flight: bool,
     pending: bool,
+    /// The queued read stands only for changes `changed()` already announced.
+    pending_announced: bool,
     /// Bumped by every change MCode makes; a read begun before one is stale.
     mutations: u64,
     stats_loaded: Option<Instant>,
@@ -100,6 +102,7 @@ impl ProjectGit {
             clock: 0,
             in_flight: false,
             pending: false,
+            pending_announced: false,
             mutations: 0,
             stats_loaded: None,
             poll: None,
@@ -210,7 +213,9 @@ impl ProjectGit {
         self.epoch += 1;
         cx.emit(GitChanged);
         self.warm_choices(cx);
-        self.reload(cx);
+        // Every view just reread for this change; the reread it starts only
+        // updates the snapshot, or each view would read it all twice.
+        self.read(true, cx);
     }
     /// Shows a stage or unstage of `relative` (a file or folder; `None` for
     /// every file) before Git runs it, since a reread takes most of a second.
@@ -241,10 +246,18 @@ impl ProjectGit {
             .detach();
     }
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
+        self.read(false, cx);
+    }
+    /// Reads the status. Unless `announced`, a changed snapshot tells every
+    /// view to reread too.
+    fn read(&mut self, announced: bool, cx: &mut Context<Self>) {
         if !self.available() {
             return;
         }
         if self.in_flight {
+            // One queued read covers every request; it announces unless all
+            // of them were announced already.
+            self.pending_announced = announced && (!self.pending || self.pending_announced);
             self.pending = true;
             return;
         }
@@ -276,7 +289,7 @@ impl ProjectGit {
                         this.statuses = status_maps(&next, &this.root);
                         this.index = Some(next);
                         this.versions = versions;
-                        if had {
+                        if had && !announced {
                             this.epoch += 1;
                             cx.emit(GitChanged);
                         }
@@ -284,7 +297,8 @@ impl ProjectGit {
                     }
                 }
                 if std::mem::take(&mut this.pending) {
-                    this.reload(cx);
+                    let announced = std::mem::take(&mut this.pending_announced);
+                    this.read(announced, cx);
                 }
             });
         })
@@ -392,5 +406,50 @@ mod tests {
         assume_staged(&mut files, None, false);
         assert_eq!(flags(&files[0]), (false, true, "untracked".into()));
         assert!(files.iter().all(|f| !f.staged && f.unstaged));
+    }
+    #[gpui::test]
+    fn a_change_made_here_is_announced_once(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let dir = std::env::temp_dir().join(format!("mcode-announce-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&dir)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "initial"]);
+        let root = dir.to_string_lossy().into_owned();
+        let project = cx.update(|cx| cx.new(|cx| ProjectGit::new(root, cx)));
+        cx.run_until_parked();
+        let events = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&project, move |_, _: &GitChanged, _| {
+                count.set(count.get() + 1)
+            })
+            .detach()
+        });
+        std::fs::write(dir.join("a.txt"), "b\n").unwrap();
+        project.update(cx, |git, cx| git.changed(cx));
+        cx.run_until_parked();
+        assert_eq!(events.get(), 1, "its own reread doesn't announce it again");
+        // A change from outside still reaches every view through a reread.
+        std::fs::write(dir.join("a.txt"), "c\nc\n").unwrap();
+        project.update(cx, |git, cx| git.reload(cx));
+        cx.run_until_parked();
+        assert_eq!(events.get(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

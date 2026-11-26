@@ -126,6 +126,33 @@ fn pending_work_carries_into_later_turns_until_kept_undone_or_committed() {
 }
 
 #[test]
+fn file_versions_change_only_with_the_recorded_snapshots() {
+    let f = Fixture::new();
+    let versions = |f: &Fixture| {
+        f.store
+            .status("session", f.cwd())
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|file| (file.relative, file.version))
+            .collect::<Vec<_>>()
+    };
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "first turn\n");
+    f.write("new.txt", "created\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let first = versions(&f);
+    assert_eq!(first, versions(&f), "an unchanged turn keeps its versions");
+    assert_ne!(first[0].1, first[1].1);
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.write("a.txt", "second turn\n");
+    f.store.finish_turn("session", f.cwd(), "second").unwrap();
+    let second = versions(&f);
+    assert_ne!(first[0], second[0], "a.txt has a new recorded result");
+    assert_eq!(first[1], second[1], "new.txt did not change");
+}
+
+#[test]
 fn files_discarded_outside_the_app_leave_the_review_for_good() {
     let f = Fixture::new();
     f.store.begin_turn("session", f.cwd(), "first").unwrap();

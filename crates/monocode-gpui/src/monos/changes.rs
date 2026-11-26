@@ -752,6 +752,7 @@ mod tests {
             deletions: 0,
             exact: true,
             undoable: true,
+            version: String::new(),
         }
     }
     fn locate(path: &Path) -> Option<(String, String)> {

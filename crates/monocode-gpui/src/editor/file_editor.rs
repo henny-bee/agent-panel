@@ -118,6 +118,8 @@ pub(crate) struct FileEditor {
     unsupported: Option<String>,
     error: Option<String>,
     disk_changed: bool,
+    /// The file's size and modified time at the last poll that reread it.
+    disk_stamp: Option<(u64, Option<std::time::SystemTime>)>,
     loading: bool,
     pub saving: bool,
     pub dirty: bool,
@@ -209,8 +211,12 @@ impl FileEditor {
                 if this
                     .update(cx, |this, cx| {
                         if this.visible && !this.saving {
-                            this.load(false, cx);
-                            this.refresh_git(cx);
+                            this.poll_disk(cx);
+                            // ProjectGit announces index and HEAD changes in
+                            // its own checkout (GitChanged above).
+                            if this.cwd != this.git.read(cx).project() {
+                                this.refresh_git(cx);
+                            }
                         }
                     })
                     .is_err()
@@ -263,6 +269,7 @@ impl FileEditor {
             unsupported: None,
             error: None,
             disk_changed: false,
+            disk_stamp: None,
             loading: false,
             saving: false,
             dirty: false,
@@ -513,6 +520,29 @@ impl FileEditor {
             self.find_matches(cx);
         }
         cx.notify();
+    }
+    /// Rereads the file only when its size or modified time moved, instead
+    /// of reading it whole every poll.
+    // ponytail: a same-size write within one mtime tick (2 s on FAT drives)
+    // waits for the next change; hash the file if that ever matters.
+    fn poll_disk(&mut self, cx: &mut Context<Self>) {
+        let path = PathBuf::from(&self.path);
+        let stat = cx.background_executor().spawn(async move {
+            std::fs::metadata(&path)
+                .ok()
+                .map(|meta| (meta.len(), meta.modified().ok()))
+        });
+        cx.spawn(async move |this, cx| {
+            let stamp = stat.await;
+            let _ = this.update(cx, |this, cx| {
+                // A busy editor tries again on the next poll.
+                if this.disk_stamp != stamp && !this.loading && !this.saving {
+                    this.disk_stamp = stamp;
+                    this.load(false, cx);
+                }
+            });
+        })
+        .detach();
     }
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         // A read can outlast the 2 second poll where starting git is slow

@@ -43,6 +43,16 @@ impl Shell {
             self.history_clock += 1;
             self.history_recency.insert(id, self.history_clock);
         }
+        // Hidden chats skip Git rereads, so one coming on screen catches up.
+        let newly: Vec<i64> = shown.difference(&self.shown).copied().collect();
+        for id in newly {
+            if let Some(view) = self.sessions.get(&id) {
+                view.update(cx, |v, cx| {
+                    v.review.update(cx, |review, cx| review.refresh(cx));
+                    v.refresh_git_actions(cx);
+                });
+            }
+        }
         self.shown = shown.clone();
         let shown = self.shown_anywhere(shown, cx);
         for (&id, view) in &self.sessions {

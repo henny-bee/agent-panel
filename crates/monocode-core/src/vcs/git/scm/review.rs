@@ -108,6 +108,17 @@ pub struct FileDiffVersion {
     disk: Option<DiskVersion>,
 }
 
+impl FileDiffVersion {
+    /// A diff between recorded snapshots, named by their object IDs.
+    pub fn recorded(snapshots: String) -> Self {
+        Self {
+            index: snapshots,
+            head: None,
+            disk: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DiskVersion {
     len: u64,

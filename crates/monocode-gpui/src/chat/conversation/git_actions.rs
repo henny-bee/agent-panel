@@ -689,6 +689,7 @@ mod tests {
             deletions: 1,
             exact: true,
             undoable: true,
+            version: String::new(),
         };
         window
             .update(visual, |view, _, cx| {
@@ -738,6 +739,7 @@ mod tests {
             deletions: 0,
             exact: true,
             undoable: true,
+            version: String::new(),
         };
         window
             .update(visual, |view, _, cx| {

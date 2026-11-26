@@ -3,30 +3,44 @@ use super::*;
 /// Tips for the Graph filter: current HEAD, its upstream, and the repo
 /// default branch. Omits `refs/stash` and unmerged local branches.
 pub(super) fn history_tips(root: &Path) -> Vec<String> {
-    let mut tips = vec!["HEAD".to_string()];
-    if git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some() {
-        tips.push("@{upstream}".to_string());
-    }
-    if let Some(remote) = git_remote_name(root) {
-        if let Some(branch) = git_default_branch(root, Some(remote.as_str())) {
+    // The upstream check runs beside the remote's default-branch lookup.
+    std::thread::scope(|s| {
+        let upstream =
+            s.spawn(|| git_stdout(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_some());
+        let default = git_remote_name(root).and_then(|remote| {
+            let branch = git_default_branch(root, Some(remote.as_str()))?;
             let spec = format!("{remote}/{branch}");
-            if git_ref_exists(root, &format!("refs/remotes/{spec}")) {
-                tips.push(spec);
-            }
+            git_ref_exists(root, &format!("refs/remotes/{spec}")).then_some(spec)
+        });
+        let mut tips = vec!["HEAD".to_string()];
+        if upstream.join().unwrap() {
+            tips.push("@{upstream}".to_string());
         }
-    }
-    tips
+        tips.extend(default);
+        tips
+    })
 }
 
 pub(super) fn history_for(root: &Path, limit: Option<u32>) -> Result<History, String> {
-    if !git_is_work_tree(root) {
+    // Each git call is a process start, about 100ms on Windows: only the log
+    // waits for the others. Outside a work tree they all fail harmlessly.
+    let (work_tree, head, remotes, tips) = std::thread::scope(|s| {
+        let work_tree = s.spawn(|| git_is_work_tree(root));
+        let head = s.spawn(|| git_stdout(root, &["rev-parse", "HEAD"]));
+        let remotes = s.spawn(|| git_remote_names(root));
+        let tips = history_tips(root);
+        (
+            work_tree.join().unwrap(),
+            head.join().unwrap(),
+            remotes.join().unwrap(),
+            tips,
+        )
+    });
+    if !work_tree {
         return Ok(History::default());
     }
     let n = limit.unwrap_or(HISTORY_DEFAULT).clamp(1, HISTORY_MAX);
     let count = n.to_string();
-    let head = git_stdout(root, &["rev-parse", "HEAD"]);
-    let remotes = git_remote_names(root);
-    let tips = history_tips(root);
     let mut args = vec![
         "log".to_string(),
         "--topo-order".to_string(),
