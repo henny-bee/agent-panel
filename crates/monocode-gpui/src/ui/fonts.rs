@@ -7,7 +7,7 @@ pub(crate) const UI: &str = ".SystemUIFont";
 /// GPUI matches family names literally outside macOS, so the CSS generic
 /// `monospace` resolves to nothing there and text falls back to a
 /// proportional sans. Mirror the web build's terminal stack instead.
-const MONO_CANDIDATES: &[&str] = &[
+pub(crate) const MONO_CANDIDATES: &[&str] = &[
     "JetBrainsMono NFM",
     "JetBrainsMono Nerd Font Mono",
     "JetBrainsMono NF",
