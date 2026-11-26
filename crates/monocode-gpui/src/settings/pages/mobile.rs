@@ -377,19 +377,15 @@ fn pairing_backdrop(classic: bool) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let light = content(1.).l < 0.5;
-            let fill = if classic || light {
+            // Linux has no backdrop blur, so the fill stays opaque there.
+            let opaque =
+                content(1.).l < 0.5 || cfg!(not(any(target_os = "macos", target_os = "windows")));
+            let fill = if classic || opaque {
                 let mut fill = shell_fill();
-                fill.a = if light { 1. } else { 0.55 };
+                fill.a = if opaque { 1. } else { 0.55 };
                 fill
             } else {
                 content(0.02)
-            };
-            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            let fill = {
-                let mut fill = shell_fill();
-                fill.a = 1.;
-                fill
             };
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let quad = gpui::fill(bounds, fill)
