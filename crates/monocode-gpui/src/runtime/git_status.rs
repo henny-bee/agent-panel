@@ -4,7 +4,7 @@
 //! read requested meanwhile runs once the current one returns, and only a
 //! changed snapshot notifies.
 use gpui::{Context, EventEmitter, Task};
-use monocode_core::vcs::git::scm::{self, DiffIndex, DiffStats};
+use monocode_core::vcs::git::scm::{self, ChangedFile, DiffIndex, DiffStats};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -77,6 +77,8 @@ pub(crate) struct ProjectGit {
     clock: u64,
     in_flight: bool,
     pending: bool,
+    /// Bumped by every change MCode makes; a read begun before one is stale.
+    mutations: u64,
     stats_loaded: Option<Instant>,
     /// Reads while status is visible: a file watcher, or a timer without one.
     poll: Option<[Task<()>; 2]>,
@@ -98,6 +100,7 @@ impl ProjectGit {
             clock: 0,
             in_flight: false,
             pending: false,
+            mutations: 0,
             stats_loaded: None,
             poll: None,
         };
@@ -203,10 +206,27 @@ impl ProjectGit {
     }
     /// A mutation or file operation: reread now and tell every view.
     pub(crate) fn changed(&mut self, cx: &mut Context<Self>) {
+        self.mutations += 1;
         self.epoch += 1;
         cx.emit(GitChanged);
         self.warm_choices(cx);
         self.reload(cx);
+    }
+    /// Shows a stage or unstage of `relative` (a file or folder; `None` for
+    /// every file) before Git runs it, since a reread takes most of a second.
+    /// The reread after the command confirms it, or undoes it on failure.
+    pub(crate) fn assume_staged(
+        &mut self,
+        relative: Option<&str>,
+        staged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.mutations += 1;
+        if let Some(index) = &mut self.index {
+            assume_staged(&mut index.files, relative, staged);
+            self.statuses = status_maps(index, &self.root);
+            cx.notify();
+        }
     }
     /// Project selection warms both menus before the user opens either one.
     fn warm_choices(&self, cx: &Context<Self>) {
@@ -229,6 +249,7 @@ impl ProjectGit {
             return;
         }
         self.in_flight = true;
+        let mutations = self.mutations;
         let project = self.project.clone();
         let path = PathBuf::from(&project);
         let work = cx.background_executor().spawn(async move {
@@ -241,8 +262,10 @@ impl ProjectGit {
             let _ = this.update(cx, |this, cx| {
                 this.in_flight = false;
                 // A slow or unavailable checkout keeps its last snapshot, and
-                // never takes another checkout's.
+                // never takes another checkout's. A read begun before a change
+                // would undo a stage shown early; the change's own reread follows.
                 if this.project == project
+                    && this.mutations == mutations
                     && let Ok((next, versions)) = result
                 {
                     this.stats_loaded = Some(Instant::now());
@@ -292,6 +315,26 @@ impl ProjectGit {
         self.stats.as_ref().is_some_and(|s| s.files > 0)
     }
 }
+/// What `git add` or `git restore --staged` leaves on `relative` and the
+/// files under it: all staged or all unstaged. A new file staged is
+/// `added`; unstaged again it is `untracked`.
+fn assume_staged(files: &mut [ChangedFile], relative: Option<&str>, staged: bool) {
+    let under = |path: &str| {
+        relative.is_none_or(|folder| {
+            path.strip_prefix(folder)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    };
+    for file in files.iter_mut().filter(|file| under(&file.relative)) {
+        file.staged = staged;
+        file.unstaged = !staged;
+        match (file.status.as_str(), staged) {
+            ("untracked", true) => file.status = "added".into(),
+            ("added", false) => file.status = "untracked".into(),
+            _ => {}
+        }
+    }
+}
 fn stats_of(index: &DiffIndex) -> DiffStats {
     DiffStats {
         files: index.files.len() as i64,
@@ -303,7 +346,6 @@ fn stats_of(index: &DiffIndex) -> DiffStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monocode_core::vcs::git::scm::ChangedFile;
     fn file(path: &str, status: &str) -> ChangedFile {
         ChangedFile {
             path: path.into(),
@@ -330,5 +372,25 @@ mod tests {
         assert_eq!(map.dirs["/r/a"], "modified");
         assert!(!map.dirs.contains_key("/r"));
         assert_eq!(map.files["/r/a/gone.rs"], "deleted");
+    }
+    #[test]
+    fn an_assumed_stage_moves_a_folder_and_flips_new_files() {
+        let mut files = vec![
+            file("/r/a/new.rs", "untracked"),
+            file("/r/a/b/old.rs", "modified"),
+            file("/r/ab.rs", "modified"),
+        ];
+        let flags = |f: &ChangedFile| (f.staged, f.unstaged, f.status.clone());
+        assume_staged(&mut files, Some("a"), true);
+        assert_eq!(flags(&files[0]), (true, false, "added".into()));
+        assert_eq!(flags(&files[1]), (true, false, "modified".into()));
+        assert_eq!(
+            flags(&files[2]),
+            (false, true, "modified".into()),
+            "a sibling that only shares the name prefix stays"
+        );
+        assume_staged(&mut files, None, false);
+        assert_eq!(flags(&files[0]), (false, true, "untracked".into()));
+        assert!(files.iter().all(|f| !f.staged && f.unstaged));
     }
 }
