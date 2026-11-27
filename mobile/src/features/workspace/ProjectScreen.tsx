@@ -9,7 +9,7 @@ import { hasNativeTranscript } from "@/features/connection/nativeLink";
 import { useProjectChanges } from "@/features/connection/useProjectChanges";
 import { useProjectWorktrees } from "@/features/connection/useProjectWorktrees";
 import type { Project, SessionSummary } from "@/features/workspace/types";
-import { use, useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet } from "react-native";
 import Animated, {
   Easing,
@@ -45,7 +45,7 @@ import {
   markStartedHere,
   markViewing,
 } from "@/features/sessions/activityStore";
-import { SessionContent, SessionScreen } from "@/features/sessions/SessionScreen";
+import { SessionScreen } from "@/features/sessions/SessionScreen";
 import { SessionsPage } from "@/features/sessions/SessionsPage";
 import {
   SessionTitle,
@@ -71,7 +71,7 @@ import { ComposerWorkspace } from "@/features/workspace/ComposerWorkspace";
 import { UnreadDot, useAnyUnreadMono } from "@/features/workspace/UnreadDot";
 import { Icon } from "@/ui/Icon";
 import { androidBackHeader } from "@/ui/AndroidHeader";
-import { GlassBlurTarget, LiquidView } from "@/ui/LiquidView";
+import { LiquidView } from "@/ui/LiquidView";
 import { useDrawerActions, useDrawerSwipe } from "@/ui/ScenePager";
 import { Timed } from "@/ui/Timed";
 import { useColors } from "@/ui/theme";
@@ -110,7 +110,6 @@ export function ProjectScreen({
   // A session is pushed over its project and swipes back; only the project
   // itself swipes the drawer open.
   useDrawerSwipe(!sessionId);
-  const blurTarget = use(GlassBlurTarget);
   // What it runs with, as the model picker, a route over it, sets it.
   const { session, chosen, startAccess, accounts } = useSessionChoice(project, sessionId);
   useForgetChoiceOnLeave(project.id, sessionId);
@@ -278,11 +277,6 @@ export function ProjectScreen({
   const openSettings = () =>
     router.push({ pathname: "/settings", params: { projectId: project.id } });
 
-  // Native headers render outside the screen's context tree. Carry the page's
-  // blur target into each button callback so its glass samples page content.
-  const headerSurface = (content: ReactNode) => (
-    <GlassBlurTarget value={blurTarget}>{content}</GlassBlurTarget>
-  );
   const menuButton = (
     <ProjectHeaderButton
       label={unread ? "Projects and monos, new replies" : "Projects and monos"}
@@ -423,7 +417,7 @@ export function ProjectScreen({
               ? {
                   ...androidBackHeader(sessionTitle),
                   headerTitleAlign: "left",
-                  headerRight: () => headerSurface(sessionToolbar),
+                  headerRight: () => sessionToolbar,
                 }
               : { headerTitle: "", headerBackVisible: !sheet }
             : {
@@ -431,8 +425,8 @@ export function ProjectScreen({
                 ...(Platform.OS === "android"
                   ? {
                       headerTitleAlign: "center" as const,
-                      headerLeft: () => headerSurface(menuButton),
-                      headerRight: () => headerSurface(settingsButton),
+                      headerLeft: () => menuButton,
+                      headerRight: () => settingsButton,
                       headerBackVisible: false,
                     }
                   : {}),
@@ -459,7 +453,7 @@ export function ProjectScreen({
           <Stack.Toolbar.View>{settingsButton}</Stack.Toolbar.View>
         </Stack.Toolbar>
       )}
-      <SessionContent>
+      <>
         {sessionId ? (
           <SessionTranscript
             sessionId={sessionId}
@@ -497,7 +491,7 @@ export function ProjectScreen({
             }
           />
         )}
-      </SessionContent>
+      </>
       {/* After the content: iOS blurs under the header the scroll view it
           finds first, down each view's first child. */}
       <ConnectionNotice error={conversation.error} />

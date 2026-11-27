@@ -31,7 +31,6 @@ import { QuestionCard } from "@/features/sessions/QuestionCard";
 import { EmptySession } from "@/features/sessions/EmptySession";
 import {
   HEADER_HEIGHT,
-  SessionContent,
   SessionFrame,
   SessionScreen,
 } from "@/features/sessions/SessionScreen";
@@ -280,7 +279,7 @@ function MonoScreen({ monoOnly }: { monoOnly: boolean }) {
               />
             )}
           </Stack.Toolbar>
-          <SessionContent>{transcript}</SessionContent>
+          {transcript}
         </>
       ) : (
         // A suggested reply it offers is sent as the user's message.
