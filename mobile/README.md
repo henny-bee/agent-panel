@@ -1,6 +1,6 @@
 # MCode mobile
 
-The mobile companion comes from Monocode and hasn't been changed for MCode.
+The mobile companion comes from Monocode. MCode builds it for Android under its own name and app ID (`com.hennybee.mcode`); the iOS settings are still Monocode's.
 
 The Expo app lives in this directory and has its own npm dependencies and lockfile. The app pairs with the desktop over QUIC and shows its real workspace. Use a Node.js LTS release for development.
 
@@ -60,6 +60,25 @@ npx eas-cli@latest build --platform ios --profile development-simulator
 ```
 
 Install the completed development build, then run `npm start` to connect it to Metro.
+
+## Build an Android APK
+
+This works on Windows, macOS and Linux without EAS. It needs Rust, an Android SDK with an NDK in `ANDROID_HOME` and a JDK 17 in `JAVA_HOME`.
+
+```bash
+cd mobile
+npm ci
+npm run native:android
+npx expo prebuild -p android
+cd android
+./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64
+```
+
+On Windows, a deep checkout can fail with `ninja: error: manifest 'build.ninja' still dirty after 100 tries`. The default CMake 3.22.1 ships ninja 1.10, which can't read paths over 260 characters. Install a newer CMake with `sdkmanager "cmake;3.31.6"`, add `cmake.dir=C\:/Users/<you>/AppData/Local/Android/Sdk/cmake/3.31.6` to `android/local.properties`, and build again. `expo prebuild --clean` deletes that file, so add the line again afterwards.
+
+The APK is `android/app/build/outputs/apk/release/app-release.apk`. Install it with `adb install` or copy it to the phone. Leave out `-PreactNativeArchitectures` to also include the 32-bit ABIs. The release build is signed with the debug key, which is fine for installing directly but not for Google Play.
+
+The app has no EAS project, so it doesn't receive over-the-air updates or Expo push notifications. Both need an Expo project of your own in `app.json`.
 
 ## Check the project
 

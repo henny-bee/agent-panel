@@ -1,8 +1,7 @@
 {
   "expo": {
-    "name": "MonoCode",
+    "name": "MCode",
     "slug": "monocode-mobile",
-    "owner": "hardbeat920",
     "version": "1.0.0",
     "runtimeVersion": {
       "policy": "fingerprint"
@@ -21,6 +20,7 @@
       }
     },
     "android": {
+      "package": "com.hennybee.mcode",
       "adaptiveIcon": {
         "backgroundColor": "#000000",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -99,14 +99,6 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    },
-    "extra": {
-      "eas": {
-        "projectId": "f80fe97b-6056-48a4-9fb2-b45ca2c8974b"
-      }
-    },
-    "updates": {
-      "url": "https://u.expo.dev/f80fe97b-6056-48a4-9fb2-b45ca2c8974b"
     }
   }
 }
