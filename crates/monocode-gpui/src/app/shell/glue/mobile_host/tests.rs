@@ -352,3 +352,20 @@ fn only_a_claude_session_shown_in_the_cli_is_read_from_the_cli_log() {
         None
     );
 }
+
+#[test]
+fn a_phone_cut_names_its_row_and_an_edit_needs_new_text() {
+    use crate::chat::response_actions::Cut;
+    let cut = |params: Value| requests::mobile_cut_params(&params);
+    assert!(matches!(
+        cut(json!({"turnId": "t12", "cut": "fork"})),
+        Ok((12, Cut::Fork, None))
+    ));
+    assert!(matches!(
+        cut(json!({"turnId": "t3", "cut": "edit", "text": "again"})),
+        Ok((3, Cut::Edit, Some(text))) if text == "again"
+    ));
+    assert!(cut(json!({"turnId": "t3", "cut": "edit", "text": "  "})).is_err());
+    assert!(cut(json!({"turnId": "p42t7", "cut": "rewind"})).is_err());
+    assert!(cut(json!({"turnId": "t3", "cut": "delete"})).is_err());
+}

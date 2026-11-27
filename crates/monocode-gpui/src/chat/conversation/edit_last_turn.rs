@@ -46,6 +46,9 @@ pub(super) struct State {
     pub(super) notice: Option<Notice>,
     /// Set by Cancel edit while a cut runs, so the cut changes nothing here.
     cancel: Option<std::sync::Arc<AtomicBool>>,
+    /// A phone's edit: the text sent in place of the message once its cut is
+    /// prepared.
+    mobile_text: Option<String>,
 }
 impl State {
     pub(super) fn pending(&self) -> bool {
@@ -338,6 +341,39 @@ impl Conversation {
         }
         self.prepare_cut(turn, cut, Restore::Conversation, cx);
     }
+    /// A phone's Fork, Rewind or Edit of the user message whose first row is
+    /// `turn`. The phone has asked first, so nothing is asked here, and files
+    /// stay as they are. An edit sends `text` from that message at once.
+    pub(crate) fn mobile_cut(
+        &mut self,
+        turn: usize,
+        cut: Cut,
+        text: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.is_remote() {
+            return Err("Rewind isn't available for sessions on a remote host.".into());
+        }
+        if self.claude_mode(cx) == Some(true) {
+            return Err("This session runs in the Claude CLI. Use /rewind there.".into());
+        }
+        if !self.history_ready() || self.recovery_blocked(cx) {
+            return Err("The desktop is still loading this session. Try again.".into());
+        }
+        if self.refuse_cut(cut, cx) {
+            return Err(self.status.to_string());
+        }
+        let rows = self.transcript.read(cx).source_rows();
+        if !rows
+            .get(turn)
+            .is_some_and(|row| row.first && row.role == "user")
+        {
+            return Err("That message is no longer in the conversation.".into());
+        }
+        self.editing_last_turn.mobile_text = text.filter(|_| cut == Cut::Edit);
+        self.prepare_cut(turn, cut, Restore::Conversation, cx);
+        Ok(())
+    }
     /// `restore` other than Conversation comes only from Rewind.
     fn prepare_cut(&mut self, turn: usize, cut: Cut, restore: Restore, cx: &mut Context<Self>) {
         if self.refuse_cut(cut, cx) {
@@ -363,6 +399,9 @@ impl Conversation {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.editing_last_turn.active = false;
+                // Taken whatever happens, so a failed phone edit can't send the
+                // next one made here.
+                let mobile_text = this.editing_last_turn.mobile_text.take();
                 match result {
                     Ok(edit)
                         if this.summary.provider_id == binding
@@ -381,6 +420,10 @@ impl Conversation {
                             this.editing_last_turn.prepared = Some(edit.clone());
                             if cut == Cut::Rewind {
                                 this.run_cut(edit, false, restore == Restore::Both, cx);
+                            } else if let Some(text) = mobile_text {
+                                this.input.update(cx, |input, cx| input.set_text(text, cx));
+                                this.editing_last_turn.confirmed = Some(false);
+                                this.submit_edited(cx);
                             } else {
                                 this.status =
                                     "Editing message — sending it restarts from here".into();

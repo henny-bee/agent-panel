@@ -1,7 +1,9 @@
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { createContext, memo, use, useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+
+import { useConnection } from "@/features/connection/ConnectionProvider";
 
 import { PixelMascot } from "@/features/mascots/PixelMascot";
 import { useCollapsedToolCalls } from "@/features/settings/toolCalls";
@@ -77,7 +79,7 @@ export const TranscriptTurn = memo(function TranscriptTurn({
         const previous = turn.items[index - 1];
         switch (item.type) {
           case "user":
-            return <UserMessage key={item.id} item={item} mono={!!agent} />;
+            return <UserMessage key={item.id} item={item} mono={!!agent} turnId={turn.id} />;
           case "header":
             return agent ? (
               <MonoHeader key={item.id} item={item} agent={agent} />
@@ -199,7 +201,7 @@ function TurnFooter({ turn }: { turn: Turn }) {
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label = "Copy response" }: { text: string; label?: string }) {
   const colors = useColors();
   const styles = useStyles();
   const [copied, setCopied] = useState(false);
@@ -219,7 +221,7 @@ function CopyButton({ text }: { text: string }) {
         timer.current = setTimeout(() => setCopied(false), 2000);
       }}
       accessibilityRole="button"
-      accessibilityLabel={copied ? "Copied" : "Copy response"}
+      accessibilityLabel={copied ? "Copied" : label}
       hitSlop={6}
       style={({ pressed }) => [styles.footerButton, pressed && styles.footerButtonActive]}
     >
@@ -254,14 +256,21 @@ function DaySeparator({ at }: { at: number }) {
   );
 }
 
+/** The conversation whose messages can be forked, rewound and edited here. */
+export const MessageCuts = createContext<string | undefined>(undefined);
+
 function UserMessage({
   item,
   mono,
+  turnId,
 }: {
   item: Extract<TurnItem, { type: "user" }>;
   mono: boolean;
+  turnId: string;
 }) {
   const styles = useStyles();
+  const cuts = use(MessageCuts);
+  const actions = cuts && !mono && !item.compact ? cuts : undefined;
   const [singleLine, setSingleLine] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -312,9 +321,119 @@ function UserMessage({
         ) : null}
         {item.reaction ? <Reaction emoji={item.reaction} /> : null}
       </View>
-      {!item.compact && item.at != null ? (
-        <Text style={styles.userTime}>{formatClockTime(item.at)}</Text>
+      {(!item.compact && item.at != null) || actions ? (
+        <View style={styles.userFooter}>
+          {!item.compact && item.at != null ? (
+            <Text style={styles.userTime}>{formatClockTime(item.at)}</Text>
+          ) : null}
+          {actions ? (
+            <MessageActions conversationId={actions} turnId={turnId} text={item.text} />
+          ) : null}
+        </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * What the desktop offers under each of your messages, in its order: Fork
+ * from here, Rewind to here, Edit and Copy. The desktop makes the cut, and
+ * says why when it can't, such as while a reply is running.
+ */
+function MessageActions({
+  conversationId,
+  turnId,
+  text,
+}: {
+  conversationId: string;
+  turnId: string;
+  text: string;
+}) {
+  const { command } = useConnection();
+  const colors = useColors();
+  const styles = useStyles();
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const cut = async (kind: "fork" | "rewind" | "edit", edited?: string) => {
+    try {
+      await command("session.cut", { conversationId, turnId, cut: kind, text: edited });
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      return true;
+    } catch (reason) {
+      Alert.alert("Couldn't do that", reason instanceof Error ? reason.message : String(reason));
+      return false;
+    }
+  };
+  const fork = async () => {
+    if (await cut("fork")) Alert.alert("Forked", "The new session is in the session list.");
+  };
+  const rewind = () =>
+    Alert.alert(
+      "Rewind to this message?",
+      "It and everything after it leave the conversation. Files stay as they are.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Rewind", style: "destructive", onPress: () => void cut("rewind") },
+      ],
+    );
+  const send = async () => {
+    if (editing?.trim() && (await cut("edit", editing))) setEditing(null);
+  };
+
+  const buttons: [IconName, string, () => void][] = [
+    ["branch", "Fork from here", () => void fork()],
+    ["refresh", "Rewind to here", rewind],
+    ["edit", "Edit", () => setEditing(text)],
+  ];
+  return (
+    <View style={styles.userActions}>
+      {buttons.map(([icon, label, onPress]) => (
+        <Pressable
+          key={label}
+          onPress={onPress}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          hitSlop={6}
+          style={({ pressed }) => [styles.footerButton, pressed && styles.footerButtonActive]}
+        >
+          <Icon name={icon} size={16} color={withAlpha(colors.content, 0.4)} />
+        </Pressable>
+      ))}
+      <CopyButton text={text} label="Copy message" />
+      <Modal
+        visible={editing !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditing(null)}
+      >
+        <View style={styles.editScrim}>
+          <View style={styles.editSheet}>
+            <Text style={styles.editTitle}>Edit message</Text>
+            <Text style={styles.editDetail}>Sending it restarts the conversation from here.</Text>
+            <TextInput
+              value={editing ?? ""}
+              onChangeText={setEditing}
+              multiline
+              autoFocus
+              style={styles.editInput}
+              placeholderTextColor={colors.faint}
+            />
+            <View style={styles.editButtons}>
+              <Pressable onPress={() => setEditing(null)} hitSlop={8} accessibilityRole="button">
+                <Text style={styles.editCancel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void send()}
+                disabled={!editing?.trim()}
+                hitSlop={8}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.editSend, !editing?.trim() && styles.editSendOff]}>Send</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -575,10 +694,67 @@ const useStyles = themedStyles((colors) => ({
     fontSize: 13,
   },
   userTime: {
-    marginTop: 4,
     paddingHorizontal: 12,
     color: withAlpha(colors.content, 0.4),
     fontSize: 12,
+  },
+  userFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  userActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  editScrim: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  editSheet: {
+    gap: 12,
+    padding: 20,
+    borderRadius: 20,
+    backgroundColor: colors.sheet,
+  },
+  editTitle: {
+    color: colors.content,
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  editDetail: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+  editInput: {
+    minHeight: 96,
+    maxHeight: 240,
+    padding: 12,
+    borderRadius: 12,
+    color: colors.content,
+    fontSize: 16,
+    textAlignVertical: "top",
+    backgroundColor: colors.surface,
+  },
+  editButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 24,
+  },
+  editCancel: {
+    color: colors.muted,
+    fontSize: 16,
+  },
+  editSend: {
+    color: colors.accent,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  editSendOff: {
+    opacity: 0.4,
   },
   emoji: {
     fontSize: 56,

@@ -534,6 +534,14 @@ impl Shell {
                 })?;
                 Ok(reply)
             }
+            ("session.cut", Target::Session(id)) => {
+                let (turn, cut, text) = mobile_cut_params(params)?;
+                let view = self
+                    .ensure_session(*id, cx)
+                    .ok_or("Session is no longer available")?;
+                view.update(cx, |v, cx| v.mobile_cut(turn, cut, text, cx))?;
+                Ok(reply)
+            }
             ("session.rename", Target::Mono(_)) => {
                 Err("A Mono's conversation can't be renamed".into())
             }
@@ -869,4 +877,27 @@ pub(super) fn cli_binding<'a>(
     (settings.terminal && provider::Kind::from_id(harness) == provider::Kind::Claude)
         .then_some(binding)
         .flatten()
+}
+
+/// A phone's cut: the row its message starts on, read from the turn ID
+/// (`t12` -> 12), what to do there, and an edit's new text. Turns of older
+/// pages name their page and can't be cut from the phone.
+pub(super) fn mobile_cut_params(
+    params: &Value,
+) -> Result<(usize, crate::chat::response_actions::Cut, Option<String>), String> {
+    use crate::chat::response_actions::Cut;
+    let turn = string(params, "turnId")
+        .and_then(|turn| turn.strip_prefix('t')?.parse().ok())
+        .ok_or("This message can't be changed from the phone")?;
+    let cut = match params["cut"].as_str() {
+        Some("fork") => Cut::Fork,
+        Some("rewind") => Cut::Rewind,
+        Some("edit") => Cut::Edit,
+        _ => return Err("Unsupported mobile command".into()),
+    };
+    let text = string(params, "text").filter(|text| !text.trim().is_empty());
+    if cut == Cut::Edit && text.is_none() {
+        return Err("Type the new message first".into());
+    }
+    Ok((turn, cut, text))
 }

@@ -41,6 +41,7 @@ import {
 import { LiveSessions } from "@/features/sessions/LiveSessions";
 import { NativeTranscript } from "@/features/sessions/NativeTranscript";
 import { FileOpener } from "@/features/sessions/Markdown";
+import { MessageCuts } from "@/features/sessions/TranscriptTurn";
 import {
   markStartedHere,
   markViewing,
@@ -572,14 +573,18 @@ function SessionTranscript({
   // view is the one iOS finds to blur under the native header.
   return (
     <FileOpener value={openFile}>
-      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : <Transcript
-        key={sessionId}
-        pushed
-        busy={busy}
-        turns={turns}
-        hasOlder={hasOlder}
-        loadOlder={loadOlder}
-      />}
+      {hasNativeTranscript ? <NativeTranscript key={sessionId} conversationId={sessionId} pushed /> : (
+        <MessageCuts value={sessionId}>
+          <Transcript
+            key={sessionId}
+            pushed
+            busy={busy}
+            turns={turns}
+            hasOlder={hasOlder}
+            loadOlder={loadOlder}
+          />
+        </MessageCuts>
+      )}
       {!hasNativeTranscript && turns.length === 0 && !failed ? (
         <TranscriptLoading key={`loading:${sessionId}`} />
       ) : null}
