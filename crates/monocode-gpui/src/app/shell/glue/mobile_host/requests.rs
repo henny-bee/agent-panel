@@ -1,4 +1,5 @@
 use super::*;
+use monocode_core::provider;
 
 impl Shell {
     pub(super) fn handle_mobile_request(
@@ -240,7 +241,9 @@ impl Shell {
             }
         };
         let chat = view.read(cx);
-        if !chat.history_loaded() {
+        // A tab showing the Claude CLI has no chat rows: its conversation is
+        // read from the CLI's log, as a saved one is.
+        if !chat.history_loaded() || chat.claude_mode(cx) == Some(true) {
             return None;
         }
         // Built for every streamed frame, so only once there's history to show.
@@ -284,6 +287,12 @@ impl Shell {
             }
         };
         let summary = id.and_then(|id| self.session_summaries.get(&id).cloned());
+        // An open tab knows the session its CLI moved to with `/clear` or
+        // `/resume`; a closed one has its saved binding.
+        let binding = id.and_then(|id| match self.sessions.get(&id) {
+            Some(view) => view.read(cx).summary.provider_id.clone(),
+            None => summary.as_ref().and_then(|s| s.provider_id.clone()),
+        });
         let launches = self.mobile_launches(target, cx);
         let store = self.store.clone();
         cx.background_executor().spawn(async move {
@@ -300,18 +309,32 @@ impl Shell {
                     launches,
                 }));
             };
-            let store = locked(&store)?;
-            let rows = store.load(id)?.rows;
-            let history = store.history_before(id)?;
-            let settings = store.agent_settings(id)?.unwrap_or_default();
+            let locked_store = locked(&store)?;
+            let mut settings = locked_store.agent_settings(id)?.unwrap_or_default();
             let (harness, cwd) = match summary {
                 Some(summary) => (summary.provider, summary.cwd),
-                None => store
+                None => locked_store
                     .sessions()?
                     .into_iter()
                     .find(|s| s.id == id)
                     .map(|s| (s.provider, s.cwd))
                     .ok_or("Session is no longer available")?,
+            };
+            let log = cli_binding(&settings, &harness, binding.as_deref()).and_then(|binding| {
+                provider::claude_transcript(&settings.account, provider::claude_session(binding))
+                    .map(|path| (path, binding.to_owned()))
+            });
+            let (rows, history) = match log {
+                Some((path, binding)) => {
+                    drop(locked_store);
+                    // Turn timings are numbered by the chat's rows, not these.
+                    settings.turns.clear();
+                    (provider::claude_history(&path, &binding)?, None)
+                }
+                None => (
+                    locked_store.load(id)?.rows,
+                    locked_store.history_before(id)?,
+                ),
             };
             Ok(Arc::new(Saved {
                 id,
@@ -834,4 +857,16 @@ pub(super) fn saved_snapshot(saved: &Saved) -> Snapshot<'_> {
         question: Value::Null,
         history: saved.history,
     }
+}
+
+/// The Claude session whose CLI log holds this conversation. A session shown
+/// in the CLI keeps it there; the store only has what the chat last read.
+pub(super) fn cli_binding<'a>(
+    settings: &Settings,
+    harness: &str,
+    binding: Option<&'a str>,
+) -> Option<&'a str> {
+    (settings.terminal && provider::Kind::from_id(harness) == provider::Kind::Claude)
+        .then_some(binding)
+        .flatten()
 }

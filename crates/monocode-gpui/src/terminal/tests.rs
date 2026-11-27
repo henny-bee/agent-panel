@@ -370,3 +370,12 @@ fn a_login_shell_runs_and_its_output_reaches_the_grid() {
     }
     assert!(exited);
 }
+
+#[test]
+fn a_paste_is_marked_when_asked_and_its_end_marker_cannot_end_it_early() {
+    assert_eq!(
+        paste_bytes("a\nb\x1b[201~c", true),
+        b"\x1b[200~a\nbc\x1b[201~".to_vec()
+    );
+    assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc".to_vec());
+}

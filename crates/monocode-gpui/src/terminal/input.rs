@@ -25,14 +25,22 @@ impl Terminal {
             return;
         };
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
-        let bytes = if bracketed {
-            // A pasted end marker must not end the paste early.
-            let text = text.replace("\x1b[201~", "");
-            format!("\x1b[200~{text}\x1b[201~").into_bytes()
-        } else {
-            text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
-        };
-        self.input(bytes, cx);
+        self.input(paste_bytes(&text, bracketed), cx);
+    }
+
+    /// Types `text` as one paste, then presses Enter. As a paste, its line
+    /// breaks don't send it early; Enter waits a moment, as a CLI that gathers
+    /// a paste can take an Enter arriving with it as one more line break.
+    pub(crate) fn submit(&mut self, text: &str, cx: &mut Context<Self>) {
+        let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+        self.input(paste_bytes(text, bracketed), cx);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let _ = this.update(cx, |this, cx| this.input(b"\r".to_vec(), cx));
+        })
+        .detach();
     }
 
     pub(super) fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -463,6 +471,18 @@ fn path_at<T>(
         };
         Some(Link { range, uri, target })
     })
+}
+
+/// What pasting `text` sends: wrapped in paste markers when the program asks
+/// for them, else with line breaks as Enter presses.
+pub(crate) fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    if bracketed {
+        // A pasted end marker must not end the paste early.
+        let text = text.replace("\x1b[201~", "");
+        format!("\x1b[200~{text}\x1b[201~").into_bytes()
+    } else {
+        text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+    }
 }
 
 /// Bytes a keystroke sends, or None to leave it to the app's bindings.

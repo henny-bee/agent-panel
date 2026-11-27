@@ -19,6 +19,7 @@ impl Shell {
                 loading: false,
                 observed: None,
                 _observers: Vec::new(),
+                _follow: None,
             },
         );
         start.accept(Ok(()));
@@ -53,7 +54,8 @@ impl Shell {
         let Some(view) = view else {
             return;
         };
-        if watch.observed == Some(view.entity_id()) {
+        let cli = view.read(cx).claude_mode(cx) == Some(true);
+        if watch.observed == Some((view.entity_id(), cli)) {
             return;
         }
         let transcript = view.read(cx).transcript.clone();
@@ -61,10 +63,68 @@ impl Shell {
             cx.observe(&view, |this, _, cx| this.schedule_mobile_push(cx)),
             cx.observe(&transcript, |this, _, cx| this.schedule_mobile_push(cx)),
         ];
+        let follow = cli.then(|| self.follow_cli_log(id, view.downgrade(), cx));
         if let Some(watch) = self.mobile.watches.get_mut(id) {
-            watch.observed = Some(view.entity_id());
+            // Read before the mode changed, it holds the other side's rows.
+            if watch.observed.is_some_and(|(_, was)| was != cli) {
+                watch.saved = None;
+            }
+            watch.observed = Some((view.entity_id(), cli));
             watch._observers = observers;
+            watch._follow = follow;
         }
+    }
+
+    /// The CLI writes its conversation to a log, not to the chat: each time
+    /// the log changes, the watch reads it again and sends the new turns.
+    fn follow_cli_log(
+        &self,
+        id: &str,
+        view: gpui::WeakEntity<crate::chat::conversation::Conversation>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        let id = id.to_owned();
+        cx.spawn(async move |this, cx| {
+            let mut seen = None;
+            // ponytail: stats the log every half second while a phone shows
+            // it; a file watcher if many watched CLI tabs make it show.
+            loop {
+                cx.background_executor().timer(CLI_LOG_POLL).await;
+                let Ok((account, binding)) = view.read_with(cx, |chat, _| {
+                    (
+                        chat.settings.account.clone(),
+                        chat.summary.provider_id.clone(),
+                    )
+                }) else {
+                    break;
+                };
+                let stamp =
+                    cx.background_executor()
+                        .spawn(async move {
+                            binding.and_then(|binding| cli_log_stamp(&account, &binding))
+                        })
+                        .await;
+                if stamp == seen {
+                    continue;
+                }
+                let first = seen.is_none();
+                seen = stamp;
+                if first {
+                    continue;
+                }
+                let alive = this.update(cx, |this, cx| {
+                    let Some(watch) = this.mobile.watches.get_mut(&id) else {
+                        return false;
+                    };
+                    watch.saved = None;
+                    this.push_mobile_watches(cx);
+                    true
+                });
+                if !matches!(alive, Ok(true)) {
+                    break;
+                }
+            }
+        })
     }
 
     pub(super) fn push_mobile_watches(&mut self, cx: &mut Context<Self>) {
@@ -324,4 +384,16 @@ impl Shell {
             })
             .detach();
     }
+}
+
+/// The size and write time of a Claude session's CLI log, which change with
+/// each line the CLI writes.
+fn cli_log_stamp(
+    account: &monocode_core::session::profile::Profile,
+    binding: &str,
+) -> Option<(u64, std::time::SystemTime)> {
+    use monocode_core::provider;
+    let path = provider::claude_transcript(account, provider::claude_session(binding))?;
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }

@@ -162,6 +162,33 @@ impl Conversation {
         ))
     }
 
+    /// Types a phone's message into the running CLI, which owns the
+    /// conversation; false when no CLI is running. Attachments go in as their
+    /// paths, which Claude Code turns into images as it does dropped files.
+    pub(super) fn submit_to_claude_terminal(
+        &mut self,
+        prompt: &str,
+        attachments: &[std::path::PathBuf],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(state) = &self.claude_terminal else {
+            return false;
+        };
+        if state.terminal.read(cx).exited {
+            return false;
+        }
+        let text = attachments
+            .iter()
+            .map(|path| path.display().to_string())
+            .chain((!prompt.is_empty()).then(|| prompt.to_owned()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        state
+            .terminal
+            .update(cx, |terminal, cx| terminal.submit(&text, cx));
+        true
+    }
+
     /// What the keyboard should reach when this session becomes active.
     pub(crate) fn session_focus(&self, cx: &App) -> FocusHandle {
         match &self.claude_terminal {

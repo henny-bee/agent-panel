@@ -39,7 +39,7 @@ mod grid;
 pub(crate) mod input;
 use grid::Grid;
 #[cfg(test)]
-use input::key_bytes;
+use input::{key_bytes, paste_bytes};
 
 actions!(
     terminal,

@@ -36,6 +36,8 @@ use std::{
 const PUBLISH_INTERVAL: Duration = Duration::from_secs(3);
 /// At most this often while a reply streams: about 20 frames a second.
 const PUSH_INTERVAL: Duration = Duration::from_millis(50);
+/// How often a phone showing a Claude CLI session checks the CLI's log.
+const CLI_LOG_POLL: Duration = Duration::from_millis(500);
 /// Turns a conversation opens on when the phone does not say.
 const DEFAULT_TAIL: usize = 3;
 const MAX_PAGE: usize = 100;
@@ -142,8 +144,11 @@ struct Watch {
     baseline: Option<watch::Baseline>,
     saved: Option<Arc<Saved>>,
     loading: bool,
-    observed: Option<EntityId>,
+    /// The chat followed, and whether it showed the Claude CLI then.
+    observed: Option<(EntityId, bool)>,
     _observers: Vec<Subscription>,
+    /// Rereads a CLI session's log each time the CLI writes to it.
+    _follow: Option<Task<()>>,
 }
 
 /// What a session's turns are built from, live or saved.

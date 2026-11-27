@@ -105,6 +105,9 @@ impl Conversation {
         attachments: Vec<std::path::PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        if self.submit_to_claude_terminal(&prompt, &attachments, cx) {
+            return;
+        }
         if !self.history_ready() {
             self.defer_history_action(
                 move |this, cx| this.mobile_submit(prompt, attachments, cx),

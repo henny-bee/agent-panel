@@ -334,3 +334,21 @@ fn messages_need_text_or_files_and_settings_drop_malformed_values() {
     assert_eq!(settings.len(), 1);
     assert_eq!(settings["effort"], "high");
 }
+
+#[test]
+fn only_a_claude_session_shown_in_the_cli_is_read_from_the_cli_log() {
+    let cli = Settings {
+        terminal: true,
+        ..Settings::default()
+    };
+    assert_eq!(
+        requests::cli_binding(&cli, "claude", Some("abc")),
+        Some("abc")
+    );
+    assert_eq!(requests::cli_binding(&cli, "claude", None), None);
+    assert_eq!(requests::cli_binding(&cli, "codex", Some("abc")), None);
+    assert_eq!(
+        requests::cli_binding(&Settings::default(), "claude", Some("abc")),
+        None
+    );
+}
