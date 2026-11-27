@@ -117,7 +117,12 @@ if (platform === "ios") {
     (sdk && join(sdk, "ndk", readdirSync(join(sdk, "ndk")).sort().at(-1)));
   if (!ndkRoot || !existsSync(ndkRoot))
     throw new Error("Set ANDROID_NDK_HOME to an installed Android NDK.");
-  const host = process.platform === "darwin" ? "darwin-x86_64" : "linux-x86_64";
+  const windows = process.platform === "win32";
+  const host = windows
+    ? "windows-x86_64"
+    : process.platform === "darwin"
+      ? "darwin-x86_64"
+      : "linux-x86_64";
   const bin = join(ndkRoot, "toolchains/llvm/prebuilt", host, "bin");
   for (const [target, abi, clang] of [
     ["aarch64-linux-android", "arm64-v8a", "aarch64-linux-android"],
@@ -125,12 +130,13 @@ if (platform === "ios") {
     ["x86_64-linux-android", "x86_64", "x86_64-linux-android"],
     ["i686-linux-android", "x86", "i686-linux-android"],
   ]) {
-    const linker = join(bin, `${clang}24-clang`);
+    // On Windows the NDK ships its target clang as a .cmd wrapper.
+    const linker = join(bin, `${clang}24-clang${windows ? ".cmd" : ""}`);
     build(target, {
       [`CARGO_TARGET_${target.toUpperCase().replaceAll("-", "_")}_LINKER`]:
         linker,
       CC: linker,
-      AR: join(bin, "llvm-ar"),
+      AR: join(bin, `llvm-ar${windows ? ".exe" : ""}`),
     });
     const destination = join(
       mobile,
