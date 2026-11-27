@@ -128,6 +128,8 @@ pub(crate) enum SettingsEvent {
         open_router: bool,
         remote_address: String,
     },
+    /// Save what the firewall switch set.
+    MobileFirewall(bool),
     /// Start listening when needed, then make a new pairing code.
     MobilePair,
     MobileCancelInvite,

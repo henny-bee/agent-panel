@@ -247,6 +247,7 @@ impl Shell {
                     open_router,
                     remote_address,
                 } => this.mobile_configure(*enabled, *open_router, remote_address.clone(), cx),
+                SettingsEvent::MobileFirewall(open) => this.mobile_remember_firewall(*open, cx),
                 SettingsEvent::MobilePair => this.pair_mobile(cx),
                 SettingsEvent::MobileCancelInvite => this.mobile_cancel_invite(cx),
                 SettingsEvent::MobileRevoke(id) => this.mobile_revoke(id, cx),

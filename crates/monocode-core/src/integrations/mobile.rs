@@ -2,6 +2,7 @@
 //! the QUIC link in `monocode-mobile-link`. The host here is app-agnostic; the
 //! app answers [`host::Event`]s from its own state.
 pub mod catalog;
+pub mod firewall;
 pub mod host;
 pub mod notify;
 mod router;

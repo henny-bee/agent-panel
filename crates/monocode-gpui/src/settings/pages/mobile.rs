@@ -14,7 +14,7 @@ use gpui::{
     HighlightStyle, MouseButton, Role, SharedString, Stateful, StyledText, Subscription, Task,
     Window, canvas, div, prelude::*, px, relative, rgb,
 };
-use monocode_core::integrations::mobile::Status;
+use monocode_core::integrations::mobile::{Status, firewall};
 use std::{
     collections::HashSet,
     sync::Arc,
@@ -64,6 +64,12 @@ pub(in crate::settings) struct MobileState {
     remote: Option<Entity<Input>>,
     qr: Option<(String, Arc<Qr>)>,
     poll: Option<Task<()>>,
+    /// The firewall the switch changes and whether it lets phones in, read
+    /// each time the page opens.
+    firewall: Option<(firewall::Kind, Option<bool>)>,
+    /// A firewall read or change is running.
+    firewall_busy: bool,
+    firewall_task: Option<Task<()>>,
     _remote_events: Vec<Subscription>,
 }
 
@@ -121,6 +127,7 @@ impl SettingsView {
             self.mobile.poll = None;
             return;
         }
+        self.firewall_work(None, cx);
         cx.emit(SettingsEvent::MobileRefresh);
         self.mobile.poll = Some(cx.spawn(async move |this, cx| {
             loop {
@@ -252,6 +259,29 @@ impl SettingsView {
             open_router,
             remote_address,
         });
+        cx.notify();
+    }
+
+    /// Reads the firewall again, after making `change` when there is one.
+    fn firewall_work(&mut self, change: Option<(firewall::Kind, bool)>, cx: &mut Context<Self>) {
+        let work = cx.background_executor().spawn(async move {
+            let changed = change.map(|(kind, on)| firewall::set(kind, on).map(|()| on));
+            (changed, firewall::check())
+        });
+        self.mobile.firewall_busy = true;
+        self.mobile.firewall_task = Some(cx.spawn(async move |this, cx| {
+            let (changed, found) = work.await;
+            let _ = this.update(cx, |this, cx| {
+                match changed {
+                    Some(Ok(on)) => cx.emit(SettingsEvent::MobileFirewall(on)),
+                    Some(Err(error)) => this.mobile.notice = Some(error),
+                    None => {}
+                }
+                this.mobile.firewall = found;
+                this.mobile.firewall_busy = false;
+                cx.notify();
+            });
+        }));
         cx.notify();
     }
 

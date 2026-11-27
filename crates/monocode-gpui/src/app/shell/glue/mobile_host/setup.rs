@@ -63,6 +63,15 @@ impl Shell {
         self.mobile.host.as_ref().map(MobileHost::status)
     }
 
+    pub(crate) fn mobile_remember_firewall(&mut self, open: bool, cx: &mut Context<Self>) {
+        if let Some(host) = &self.mobile.host
+            && let Err(error) = host.remember_firewall(open)
+        {
+            self.error = Some(format!("Mobile access: {error}"));
+        }
+        self.sync_settings(cx);
+    }
+
     pub(crate) fn mobile_configure(
         &mut self,
         enabled: bool,

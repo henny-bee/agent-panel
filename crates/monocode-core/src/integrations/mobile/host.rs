@@ -84,6 +84,8 @@ struct Config {
     #[serde(default)]
     remote_address: String,
     #[serde(default)]
+    firewall_open: bool,
+    #[serde(default)]
     devices: Vec<Device>,
 }
 impl Default for Config {
@@ -92,6 +94,7 @@ impl Default for Config {
             enabled: false,
             open_router: true,
             remote_address: String::new(),
+            firewall_open: false,
             devices: Vec::new(),
         }
     }
@@ -109,6 +112,9 @@ pub struct Status {
     pub open_router: bool,
     pub remote_address: String,
     pub router_status: String,
+    /// What the firewall switch last set, for a firewall whose rules only
+    /// root can read (ufw).
+    pub firewall_open: bool,
     /// Why the service could not start, when it could not.
     pub error: Option<String>,
 }
@@ -306,6 +312,7 @@ impl MobileHost {
             open_router: inner.config.open_router,
             remote_address: inner.config.remote_address.clone(),
             router_status: inner.router_status.clone(),
+            firewall_open: inner.config.firewall_open,
             error: inner.error.clone(),
         }
     }
@@ -331,6 +338,7 @@ impl MobileHost {
                 enabled,
                 open_router,
                 remote_address: remote_address.into(),
+                firewall_open: inner.config.firewall_open,
                 devices: inner.config.devices.clone(),
             };
             self.save(&config)?;
@@ -354,6 +362,16 @@ impl MobileHost {
             }
         }
         super::router::restart(self);
+        Ok(())
+    }
+
+    /// Saves what the firewall switch set, as [`Status::firewall_open`].
+    pub fn remember_firewall(&self, open: bool) -> Result<(), String> {
+        let mut inner = self.inner.lock().map_err(unavailable)?;
+        let mut config = inner.config.clone();
+        config.firewall_open = open;
+        self.save(&config)?;
+        inner.config = config;
         Ok(())
     }
 

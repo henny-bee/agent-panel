@@ -171,6 +171,31 @@ impl SettingsView {
             cx,
             move |this, on, cx| this.configure_mobile(on, open_router, remote.clone(), cx),
         ));
+        let firewall = self.mobile.firewall.map(|(kind, open)| {
+            let on = open.unwrap_or(status.firewall_open);
+            let (label, ask) = if kind == firewall::Kind::Windows {
+                ("Allow through Windows Firewall", "administrator permission")
+            } else {
+                ("Allow through the firewall", "your password")
+            };
+            let mut description = if on {
+                "Phones on your network can get through.".to_owned()
+            } else {
+                format!("The firewall blocks phones. Turning this on asks for {ask}.")
+            };
+            if open.is_none() {
+                description += " ufw shows its rules only to administrators, so this is what you last set here.";
+            }
+            let toggle = self.toggle(
+                "mobile-firewall",
+                label,
+                on,
+                self.mobile.firewall_busy,
+                cx,
+                move |this, on, cx| this.firewall_work(Some((kind, on)), cx),
+            );
+            self.row(None, false, label, Some(description.into()), vec![toggle])
+        });
         div()
             .mt_5()
             .overflow_hidden()
@@ -191,6 +216,7 @@ impl SettingsView {
                 Some(description),
                 controls,
             ))
+            .children(firewall)
             .into_any_element()
     }
 
